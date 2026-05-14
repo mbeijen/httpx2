@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased
+
+### Fixed
+
+* Fix HTTP/2 send when a peer's `SETTINGS` frame reduces `INITIAL_WINDOW_SIZE` such that a stream's flow-control window becomes negative. Previously `httpcore2` would unblock as soon as the window was non-zero, causing h2 to raise `LocalProtocolError`. (Refs [encode/httpcore#1082](https://github.com/encode/httpcore/issues/1082), [encode/httpx#3601](https://github.com/encode/httpx/discussions/3601).)
+
 ## 2.0.0
 
 Official first release of `httpx2`. No changes since `2.0.0b1`.

@@ -83,10 +83,14 @@ def unasync_dir(in_dir, out_dir, check_only=False):
 
 def main():
     check_only = "--check" in sys.argv
-    unasync_dir("httpcore2/_async", "httpcore2/_sync", check_only=check_only)
     unasync_dir(
-        "../../tests/httpcore2/_async",
-        "../../tests/httpcore2/_sync",
+        "src/httpcore2/httpcore2/_async",
+        "src/httpcore2/httpcore2/_sync",
+        check_only=check_only,
+    )
+    unasync_dir(
+        "tests/httpcore2/_async",
+        "tests/httpcore2/_sync",
         check_only=check_only,
     )
 

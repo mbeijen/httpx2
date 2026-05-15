@@ -204,14 +204,20 @@ async def test_http2_connection_with_goaway():
 
 @pytest.mark.anyio
 async def test_http2_connection_with_negative_flow_control_window():
-    # After the 65535-byte window is exhausted, server reduces INITIAL_WINDOW_SIZE
-    # to 32768, driving the stream window to -32767 before WINDOW_UPDATE restores it.
+    """A negative stream flow-control window must be awaited, not sent into.
+
+    After the 65535-byte window is exhausted, the server reduces INITIAL_WINDOW_SIZE
+    by 32767, which adjusts the just-exhausted stream window from 0 to -32767.
+    `_wait_for_outgoing_flow` must park the stream until WINDOW_UPDATE restores
+    positive credit; otherwise `h2` raises `LocalProtocolError` on the next send_data.
+    """
     origin = httpcore2.Origin(b"https", b"example.com", 443)
     reduce_settings = hyperframe.frame.SettingsFrame(stream_id=0)
     reduce_settings.settings = {hyperframe.frame.SettingsFrame.INITIAL_WINDOW_SIZE: 32768}
     stream = httpcore2.AsyncMockStream(
         [
             hyperframe.frame.SettingsFrame(stream_id=0).serialize(),
+            # This frame reduces INITIAL_WINDOW_SIZE to 32768, which adjusts the just-exhausted stream window to -32767.
             reduce_settings.serialize(),
             hyperframe.frame.WindowUpdateFrame(stream_id=0, window_increment=100_000).serialize(),
             hyperframe.frame.WindowUpdateFrame(stream_id=1, window_increment=100_000).serialize(),
@@ -229,11 +235,7 @@ async def test_http2_connection_with_negative_flow_control_window():
         ]
     )
     async with httpcore2.AsyncHTTP2Connection(origin=origin, stream=stream) as conn:
-        response = await conn.request(
-            "POST",
-            "https://example.com/",
-            content=b"x" * 100_000,
-        )
+        response = await conn.request("POST", "https://example.com/", content=b"x" * 100_000)
         assert response.status == 200
         assert response.content == b"response"
 

@@ -15,7 +15,7 @@ def test_main_deprecated():
 
 def test_unknown_attribute():
     with pytest.raises(AttributeError, match="has no attribute 'does_not_exist'"):
-        httpx2.does_not_exist  # type: ignore[attr-defined]
+        _ = httpx2.does_not_exist
 
 
 def splitlines(output: str) -> typing.Iterable[str]:

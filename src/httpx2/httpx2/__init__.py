@@ -18,7 +18,7 @@ def __getattr__(name: str):  # type: ignore[no-untyped-def]
 
         warnings.warn(
             "`httpx2.main` is deprecated and will be removed in a future release. "
-            "Use the `httpx2` CLI entry point or `httpx2._main.main` directly.",
+            "Use the `httpx2` CLI entry point instead.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -199,9 +199,14 @@ class ZStandardDecoder(ContentDecoder):
         self.seen_data = False
 
     def decode(self, data: bytes) -> bytes:
+        if not data:
+            return b""
         self.seen_data = True
         output = io.BytesIO()
         try:
+            if self.decompressor.eof:
+                data = self.decompressor.unused_data + data
+                self.decompressor = ZstdDecompressor()
             output.write(self.decompressor.decompress(data))
             while self.decompressor.eof and self.decompressor.unused_data:
                 unused_data = self.decompressor.unused_data

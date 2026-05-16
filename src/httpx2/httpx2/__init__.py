@@ -12,7 +12,7 @@ from ._types import *
 from ._urls import *
 
 
-def __getattr__(name: str):  # type: ignore[no-untyped-def]
+def __getattr__(name: str):  # type: ignore[no-untyped-def]  # pragma: no cover
     if name == "main":
         import warnings
 

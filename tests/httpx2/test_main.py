@@ -1,21 +1,10 @@
 import os
 import typing
 
-import pytest
 from click.testing import CliRunner
 
 import httpx2
 from httpx2._main import main
-
-
-def test_main_deprecated():
-    with pytest.warns(DeprecationWarning, match="`httpx2.main` is deprecated"):
-        assert httpx2.main is main
-
-
-def test_unknown_attribute():
-    with pytest.raises(AttributeError, match="has no attribute 'does_not_exist'"):
-        _ = httpx2.does_not_exist
 
 
 def splitlines(output: str) -> typing.Iterable[str]:

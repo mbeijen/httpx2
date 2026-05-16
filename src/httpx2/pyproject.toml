@@ -70,7 +70,7 @@ zstd = [
 ]
 
 [project.scripts]
-httpx2 = "httpx2:main"
+httpx2 = "httpx2._cli:main"
 
 [project.urls]
 Changelog = "https://github.com/pydantic/httpx2/blob/main/src/httpx2/CHANGELOG.md"

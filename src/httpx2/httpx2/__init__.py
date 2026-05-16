@@ -12,24 +12,17 @@ from ._types import *
 from ._urls import *
 
 
-# import the _main module lazily so that we only incur the extra import time
-# for the CLI dependencies (click, rich, etc.) when intending to run the CLI
-# and not on every import of httpx2
 def __getattr__(name: str):  # type: ignore[no-untyped-def]
     if name == "main":
-        try:
-            from ._main import main
-        except ImportError:  # pragma: no cover
+        import warnings
 
-            def main() -> None:  # type: ignore
-                import sys
-
-                print(
-                    "The httpx command line client could not run because the "
-                    "required dependencies were not installed.\nMake sure you've "
-                    "installed everything with: pip install 'httpx[cli]'"
-                )
-                sys.exit(1)
+        warnings.warn(
+            "`httpx2.main` is deprecated and will be removed in a future release. "
+            "Use the `httpx2` CLI entry point or `httpx2._main.main` directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from ._main import main
 
         return main
 

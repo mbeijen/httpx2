@@ -4,6 +4,7 @@ import typing
 from click.testing import CliRunner
 
 import httpx2
+from httpx2._main import main
 
 
 def splitlines(output: str) -> typing.Iterable[str]:
@@ -16,7 +17,7 @@ def remove_date_header(lines: typing.Iterable[str]) -> typing.Iterable[str]:
 
 def test_help():
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, ["--help"])
+    result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
     assert "A next generation HTTP client." in result.output
 
@@ -24,7 +25,7 @@ def test_help():
 def test_get(server):
     url = str(server.url)
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url])
+    result = runner.invoke(main, [url])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 200 OK",
@@ -39,7 +40,7 @@ def test_get(server):
 def test_json(server):
     url = str(server.url.copy_with(path="/json"))
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url])
+    result = runner.invoke(main, [url])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 200 OK",
@@ -57,7 +58,7 @@ def test_binary(server):
     url = str(server.url.copy_with(path="/echo_binary"))
     runner = CliRunner()
     content = "Hello, world!"
-    result = runner.invoke(httpx2.main, [url, "-c", content])
+    result = runner.invoke(main, [url, "-c", content])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 200 OK",
@@ -72,7 +73,7 @@ def test_binary(server):
 def test_redirects(server):
     url = str(server.url.copy_with(path="/redirect_301"))
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url])
+    result = runner.invoke(main, [url])
     assert result.exit_code == 1
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 301 Moved Permanently",
@@ -86,7 +87,7 @@ def test_redirects(server):
 def test_follow_redirects(server):
     url = str(server.url.copy_with(path="/redirect_301"))
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url, "--follow-redirects"])
+    result = runner.invoke(main, [url, "--follow-redirects"])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 301 Moved Permanently",
@@ -106,7 +107,7 @@ def test_follow_redirects(server):
 def test_post(server):
     url = str(server.url.copy_with(path="/echo_body"))
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url, "-m", "POST", "-j", '{"hello": "world"}'])
+    result = runner.invoke(main, [url, "-m", "POST", "-j", '{"hello": "world"}'])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "HTTP/1.1 200 OK",
@@ -121,7 +122,7 @@ def test_post(server):
 def test_verbose(server):
     url = str(server.url)
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url, "-v"])
+    result = runner.invoke(main, [url, "-v"])
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
         "* Connecting to '127.0.0.1'",
@@ -145,7 +146,7 @@ def test_verbose(server):
 def test_auth(server):
     url = str(server.url)
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, [url, "-v", "--auth", "username", "password"])
+    result = runner.invoke(main, [url, "-v", "--auth", "username", "password"])
     print(result.output)
     assert result.exit_code == 0
     assert remove_date_header(splitlines(result.output)) == [
@@ -172,7 +173,7 @@ def test_download(server):
     url = str(server.url)
     runner = CliRunner()
     with runner.isolated_filesystem():
-        runner.invoke(httpx2.main, [url, "--download", "index.txt"])
+        runner.invoke(main, [url, "--download", "index.txt"])
         assert os.path.exists("index.txt")
         with open("index.txt", "r") as input_file:
             assert input_file.read() == "Hello, world!"
@@ -180,7 +181,7 @@ def test_download(server):
 
 def test_errors():
     runner = CliRunner()
-    result = runner.invoke(httpx2.main, ["invalid://example.org"])
+    result = runner.invoke(main, ["invalid://example.org"])
     assert result.exit_code == 1
     assert splitlines(result.output) == [
         "UnsupportedProtocol: Request URL has an unsupported protocol 'invalid://'.",

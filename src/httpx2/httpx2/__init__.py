@@ -11,24 +11,6 @@ from ._transports import *
 from ._types import *
 from ._urls import *
 
-
-def __getattr__(name: str):  # type: ignore[no-untyped-def]  # pragma: no cover
-    if name == "main":
-        import warnings
-
-        warnings.warn(
-            "`httpx2.main` is deprecated and will be removed in a future release. "
-            "Use the `httpx2` CLI entry point instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from ._main import main
-
-        return main
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ = [
     "__description__",
     "__title__",
@@ -106,3 +88,20 @@ __locals = locals()
 for __name in __all__:
     if not __name.startswith("__"):
         setattr(__locals[__name], "__module__", "httpx2")  # noqa
+
+
+def __getattr__(name: str) -> object:  # pragma: no cover
+    if name == "main":
+        import warnings
+
+        warnings.warn(
+            "`httpx2.main` is deprecated and will be removed in a future release. "
+            "Use the `httpx2` CLI entry point instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from ._main import main
+
+        return main
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

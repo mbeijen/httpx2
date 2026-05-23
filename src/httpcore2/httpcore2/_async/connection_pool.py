@@ -263,11 +263,20 @@ class AsyncConnectionPool(AsyncRequestInterface):
         """
         closing_connections = []
 
+        # Connections currently referenced by an active request (including
+        # connections that are in the process of being established).
+        request_connections = {r.connection for r in self._requests}
+
         # First we handle cleaning up any connections that are closed,
         # have expired their keep-alive, or surplus idle connections.
         for connection in list(self._connections):
             if connection.is_closed():
                 # log: "removing closed connection"
+                self._connections.remove(connection)
+            elif not (connection.is_connected() or connection in request_connections):
+                # Garbage: a NEW-state connection whose request was cancelled
+                # before the TCP handshake completed.  Drop it without closing
+                # (there is no socket to close yet).
                 self._connections.remove(connection)
             elif connection.has_expired():
                 # log: "closing expired connection"

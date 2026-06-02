@@ -13,7 +13,7 @@ httpx2 rather than maintain a parallel fork. See
 <https://tildeweb.nl/~michiel/httpx2.html>.
 
 Open PRs already covering ports were checked via `gh pr list --repo
-pydantic/httpx2 --state open` on 2026-06-01.
+pydantic/httpx2 --state open` on 2026-06-02.
 
 Fork-only plumbing (image branding, `sys.modules` aliasing, Forgejo CI,
 release bumps, docs about the fork itself, codespell typo CI, the
@@ -67,7 +67,6 @@ not relevant to httpx2.
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `3058e2d` | Use `RLock` instead of `Lock` to prevent thread deadlock | Verified missing — `_synchronization.py` still uses plain Lock. Port of encode/httpcore#1003 (Zenulous). Re-entrant acquire from the same thread currently deadlocks. |
 | `0387930` | Propagate timeout through SOCKS5 handshake | Verified missing — `_init_socks5_connection()` in `httpcore2/_async/socks_proxy.py:42` takes no `timeout` arg. A non-responsive SOCKS5 proxy hangs forever regardless of the request timeout. Port of encode/httpcore#1055. |
 | `b192486` | Close proxy connection when tunnel TLS handshake fails | CONNECT-tunnel TLS failure currently leaves the TCP connection ACTIVE in the pool until `max_connections` is exhausted. Port of encode/httpcore#1049 (baizhu). |
 | `e88f30b` | Release h2 semaphore/streams on error + fix stream-events race | Two related deadlock/race fixes: release the max-streams semaphore on `NoAvailableStreamIDError`, and move `del self._events[stream_id]` inside `_state_lock`. Ports encode/httpcore#1061 and #1062. |
@@ -82,6 +81,7 @@ not relevant to httpx2.
 
 ### Skipped — already in httpx2 / open PR / fork-only
 
+- `3058e2d` (RLock instead of Lock to prevent thread deadlock) → covered by open PR #1008.
 - `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → covered by open PR #1007.
 - `a7500e4` (pool poisoning on cancellation, `is_connected()`) → covered by open PR #983.
 - `199129e` (memoryview write) → already merged as `79f788b7` (#954) in httpx2.
@@ -91,7 +91,7 @@ not relevant to httpx2.
 
 ## Suggested next steps
 
-1. The **httpcorexyz bug-fix block** (`3058e2d`, `0387930`, `b192486`, `e88f30b`, `c4e9340`) is the most valuable — each is an upstream-reviewed httpcore fix that httpx2 currently lacks, and each ports cleanly with `unasync.py` already in place.
+1. The **httpcorexyz bug-fix block** (`0387930`, `b192486`, `e88f30b`, `c4e9340`) is the most valuable — each is an upstream-reviewed httpcore fix that httpx2 currently lacks, and each ports cleanly with `unasync.py` already in place. (`3058e2d` RLock fix is now PR #1008.)
 2. The httpxyz **redirect/transport/stream fixes** (`36420a4`, `3573282`, `e0030ea`) are small, isolated, and have upstream PRs to cite.
 3. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR if you're unsure whether the httpx2 maintainers want it.
 4. `91ad8ea` (`map_exceptions` retirement) is bigger and more opinionated — open an issue/discussion first.

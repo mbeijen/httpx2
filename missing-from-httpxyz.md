@@ -67,7 +67,6 @@ not relevant to httpx2.
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `b192486` | Close proxy connection when tunnel TLS handshake fails | CONNECT-tunnel TLS failure currently leaves the TCP connection ACTIVE in the pool until `max_connections` is exhausted. Port of encode/httpcore#1049 (baizhu). |
 | `e88f30b` | Release h2 semaphore/streams on error + fix stream-events race | Two related deadlock/race fixes: release the max-streams semaphore on `NoAvailableStreamIDError`, and move `del self._events[stream_id]` inside `_state_lock`. Ports encode/httpcore#1061 and #1062. |
 | `c4e9340` | Explicitly close async generators to prevent Trio warnings | Adds `safe_async_iterate()` / `safe_iterate()` context managers and applies them across `connection_pool.py`, `http11.py`, `http2.py`, `_models.py`. Port of encode/httpcore#1019 (Alex Grönholm). |
 | `9d86b44` | Reduce lock contention in `PoolByteStream.close()` | Marks pool requests closed outside the lock, cleans up inside `_assign_requests_to_connections()`. Also adds `Origin.__hash__`. Port of encode/httpcore#1038. |
@@ -80,6 +79,7 @@ not relevant to httpx2.
 
 ### Skipped — already in httpx2 / open PR / fork-only
 
+- `b192486` (close proxy connection when tunnel TLS handshake fails) → covered by open PR #1010.
 - `0387930` (propagate timeout through SOCKS5 handshake) → covered by open PR #1009.
 - `3058e2d` (RLock instead of Lock to prevent thread deadlock) → covered by open PR #1008.
 - `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → covered by open PR #1007.
@@ -91,7 +91,10 @@ not relevant to httpx2.
 
 ## Suggested next steps
 
-1. The **httpcorexyz bug-fix block** (`b192486`, `e88f30b`, `c4e9340`) is the most valuable — each is an upstream-reviewed httpcore fix that httpx2 currently lacks, and each ports cleanly with `unasync.py` already in place. (`3058e2d` RLock fix → PR #1008; `0387930` SOCKS5 timeout → PR #1009.)
-2. The httpxyz **redirect/transport/stream fixes** (`36420a4`, `3573282`, `e0030ea`) are small, isolated, and have upstream PRs to cite.
-3. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR if you're unsure whether the httpx2 maintainers want it.
-4. `91ad8ea` (`map_exceptions` retirement) is bigger and more opinionated — open an issue/discussion first.
+1. **`e88f30b`** (h2 semaphore/streams + stream-events race) — next priority. Real HTTP/2 hang/race fixes that affect a mainstream code path; bigger surface than the proxy fixes, so worth careful review.
+2. `c4e9340` (close async generators to prevent Trio warnings) — bigger diff, benefits trio users mainly.
+3. The httpxyz **redirect/transport/stream fixes** (`36420a4`, `3573282`, `e0030ea`) are small, isolated, and have upstream PRs to cite — good "quick wins" alongside the h2 work.
+4. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR.
+5. `91ad8ea` (`map_exceptions` retirement) is bigger and more opinionated — open an issue/discussion first.
+
+Already underway: `3058e2d` → PR #1008 (RLock), `0387930` → PR #1009 (SOCKS5 timeout), `b192486` → PR #1010 (CONNECT tunnel TLS close).

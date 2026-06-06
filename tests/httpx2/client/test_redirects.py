@@ -41,6 +41,11 @@ def redirects(request: httpx2.Request) -> httpx2.Response:
         raw_headers = [(b"location", "https://😇/".encode("utf-8"))]
         return httpx2.Response(status_code, headers=raw_headers)
 
+    elif request.url.path == "/invalid_location_redirect":
+        status_code = httpx2.codes.FOUND
+        headers = {"location": "bad:url"}
+        return httpx2.Response(status_code, headers=headers)
+
     elif request.url.path == "/no_scheme_redirect":
         status_code = httpx2.codes.SEE_OTHER
         headers = {"location": "//example.org/"}
@@ -164,6 +169,21 @@ async def test_async_next_request() -> None:
         response = await client.send(response.next_request, follow_redirects=False)
         assert response.status_code == httpx2.codes.OK
         assert response.url == "https://example.org/"
+        assert response.next_request is None
+
+
+def test_no_follow_redirects_with_invalid_location() -> None:
+    client = httpx2.Client(transport=httpx2.MockTransport(redirects))
+    response = client.get("https://example.org/invalid_location_redirect", follow_redirects=False)
+    assert response.status_code == httpx2.codes.FOUND
+    assert response.next_request is None
+
+
+@pytest.mark.anyio
+async def test_async_no_follow_redirects_with_invalid_location() -> None:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(redirects)) as client:
+        response = await client.get("https://example.org/invalid_location_redirect", follow_redirects=False)
+        assert response.status_code == httpx2.codes.FOUND
         assert response.next_request is None
 
 

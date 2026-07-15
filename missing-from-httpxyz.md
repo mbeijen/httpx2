@@ -29,8 +29,7 @@ not relevant to httpx2.
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `bd45506` | Fix `unquote` index error on empty string | Verified still missing — `_utils.py:90` still has the old `unquote()` (`value[0] == value[-1]` indexes an empty string). Original upstream proposal: encode/httpx#3771, with akx's improved version. |
-| `3573282` | Ensure mounted transports are closed even if main transport raises | Verified still missing — `_client.py:1227` closes `self._transport` then loops over `self._mounts.values()` with no `try/finally`; a raise from the main transport's `close()` still leaks mounted proxy transports. Port of encode/httpx#3769 (Kadir Can Ozden). |
+| `3573282` | Ensure mounted transports are closed even if main transport raises | Verified still missing — `_client.py:1372` (`close()`), `1401` (`__exit__`), `2209` (`aclose()`), `2238` (`__aexit__`) all close `self._transport` then loop over `self._mounts.values()` with no `try/finally`; a raise from the main transport's close still leaks mounted proxy transports. Port of encode/httpx#3769 (Kadir Can Ozden). |
 
 ### Features worth considering
 
@@ -47,6 +46,7 @@ not relevant to httpx2.
 
 ### Skipped — already in httpx2 / already in an open PR / fork-only
 
+- `bd45506` (fix `unquote` index error on empty string) → **already in httpx2**, and had been for a while: merged 2026-06-04 as **PR #1023** ("Parse empty Digest auth realm without crashing"), authored by the repo owner with Jeroen van Zundert as co-author. `_auth.py:228` already uses `value.strip('"')` and the `unquote()` helper is gone from `_utils.py`. This survey's earlier claim that it was "still missing" was stale.
 - `70d302c` (add RFC 9110 status code texts) → opened as **PR #1069** ("Add RFC 9110 status code constants", 2026-07-15). Renames `REQUEST_ENTITY_TOO_LARGE`→`CONTENT_TOO_LARGE` (413), `REQUEST_URI_TOO_LONG`→`URI_TOO_LONG` (414), `REQUESTED_RANGE_NOT_SATISFIABLE`→`RANGE_NOT_SATISFIABLE` (416), `UNPROCESSABLE_ENTITY`→`UNPROCESSABLE_CONTENT` (422); old names kept as aliases.
 - `36420a4` (fix `InvalidURL` raised on malformed Location header when `follow_redirects=False`) → now has **open PR #1064** ("Preserve the response when a redirect has an invalid Location and redirects are not followed", opened 2026-07-14). Confirmed still missing in `_client.py` (`_build_redirect_request` at line 951 is still called unconditionally before the `follow_redirects` check at line 954) and the PR's description matches the fork fix exactly.
 - `e0030ea` (add real async iterator for ByteStreams) → now has **open PR #1036** ("Add real async iterator for ByteStreams", akx, opened 2026-06-16). `_content.py:38` still uses an `async def __aiter__` generator, so the fix is still needed; the PR is a verbatim port of encode/httpx#3777 (Aarni Koskela), matching the fork commit.
@@ -98,7 +98,7 @@ not relevant to httpx2.
 
 Genuinely unaddressed, with no open PR as of 2026-07-14:
 
-1. `bd45506` (`unquote` index error) and `3573282` (mounted transports leak on raise) — small, isolated, good quick wins.
+1. `3573282` (mounted transports leak on raise) — small, isolated, good quick win.
 2. `9d86b44` (lock contention in `PoolByteStream.close()` + `Origin.__hash__`) — perf-shaped, requires care.
 3. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR.
 4. `34e7bbe` (pickling `HTTPStatusError`) — small, additive.

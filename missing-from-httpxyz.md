@@ -13,7 +13,10 @@ httpx2 rather than maintain a parallel fork. See
 <https://tildeweb.nl/~michiel/httpx2.html>.
 
 Open PRs already covering ports were checked via `gh pr list --repo
-pydantic/httpx2 --state open` on 2026-06-02.
+pydantic/httpx2 --state open` on 2026-06-02, and re-checked on
+2026-07-14 — several items have since merged, one PR closed unmerged
+(superseded by an upstream fix), and a couple of remaining gaps have
+since grown their own open PRs.
 
 Fork-only plumbing (image branding, `sys.modules` aliasing, Forgejo CI,
 release bumps, docs about the fork itself, codespell typo CI, the
@@ -26,31 +29,31 @@ not relevant to httpx2.
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `36420a4` | Fix `InvalidURL` raised on malformed Location header when `follow_redirects=False` | Verified missing — `_client.py:951` still calls `_build_redirect_request` unconditionally before checking `follow_redirects`. Closes httpxyz #37; same shape as upstream encode/httpx issue. |
-| `bd45506` | Fix `unquote` index error on empty string | Verified missing — `_utils.py:89` still has the old `unquote()`. Original upstream proposal: encode/httpx#3771, with akx's improved version. |
-| `3573282` | Ensure mounted transports are closed even if main transport raises | `try/finally` around main-transport close so proxy mounts don't leak. Port of encode/httpx#3769 (Kadir Can Ozden). |
-| `e0030ea` | Add real async iterator for ByteStreams | Verified missing — `_content.py:38` still uses an `async def __aiter__` generator. Triggers ResourceWarning under trio ≥0.31. Port of encode/httpx#3777 (Aarni Koskela). |
+| `bd45506` | Fix `unquote` index error on empty string | Verified still missing — `_utils.py:90` still has the old `unquote()` (`value[0] == value[-1]` indexes an empty string). Original upstream proposal: encode/httpx#3771, with akx's improved version. |
+| `3573282` | Ensure mounted transports are closed even if main transport raises | Verified still missing — `_client.py:1227` closes `self._transport` then loops over `self._mounts.values()` with no `try/finally`; a raise from the main transport's `close()` still leaks mounted proxy transports. Port of encode/httpx#3769 (Kadir Can Ozden). |
 
 ### Features worth considering
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `6866277` | Add `keep_method_for_redirects` option to Client / AsyncClient | Verified missing — opt-in to preserve method on 301/302 (303 unaffected). Port of encode/httpx#3783 (Takashi Kajinami). |
-| `70d302c` | Add RFC 9110 status code texts | Updated wording for status constants, old names kept as backwards-compat aliases. No equivalent in httpx2's `_status_codes.py`. |
-| `34e7bbe` | Support pickling `HTTPStatusError` | Camillo Lugaresi's patch — adds `__reduce__`-style support so the exception roundtrips through pickle. Verified missing in `_exceptions.py`. |
+| `6866277` | Add `keep_method_for_redirects` option to Client / AsyncClient | Verified still missing — no reference anywhere in `src/httpx2`. Opt-in to preserve method on 301/302 (303 unaffected). Port of encode/httpx#3783 (Takashi Kajinami). |
+| `70d302c` | Add RFC 9110 status code texts | Verified still missing — `_status_codes.py:136` still reads `UNPROCESSABLE_ENTITY = 422, "Unprocessable Entity"` (RFC 9110 renamed the phrase). Old names would be kept as backwards-compat aliases. |
+| `34e7bbe` | Support pickling `HTTPStatusError` | Verified still missing — `_exceptions.py`'s `HTTPStatusError` has no `__reduce__`. Camillo Lugaresi's patch adds roundtrip-through-pickle support. |
 
 ### Docs worth pulling in
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `f672124` | Document that `AsyncClient()` blocks the event loop during SSL init | Adds a docstring note + workaround (`asyncio.to_thread`). Related to encode/httpx#3707 discussion. |
+| `f672124` | Document that `AsyncClient()` blocks the event loop during SSL init | Verified still missing. Adds a docstring note + workaround (`asyncio.to_thread`). Related to encode/httpx#3707 discussion. |
 
 ### Skipped — already in httpx2 / already in an open PR / fork-only
 
+- `36420a4` (fix `InvalidURL` raised on malformed Location header when `follow_redirects=False`) → now has **open PR #1064** ("Preserve the response when a redirect has an invalid Location and redirects are not followed", opened 2026-07-14). Confirmed still missing in `_client.py` (`_build_redirect_request` at line 951 is still called unconditionally before the `follow_redirects` check at line 954) and the PR's description matches the fork fix exactly.
+- `e0030ea` (add real async iterator for ByteStreams) → now has **open PR #1036** ("Add real async iterator for ByteStreams", akx, opened 2026-06-16). `_content.py:38` still uses an `async def __aiter__` generator, so the fix is still needed; the PR is a verbatim port of encode/httpx#3777 (Aarni Koskela), matching the fork commit.
 - `091af7358` (httpx2) covers the same SSL-cert-with-verify-str case as `094bf04` in httpxyz.
-- `599523b` + `0598ab0` (Sander's per-label IDNA decode) → covered by open PR #979.
-- `a9e7541` (no_proxy IPv6 CIDR + IPNetPattern) → covered by open PRs #967 and #969.
-- `417d6c6` (params don't overwrite baseurl) → covered by open PR #966.
+- `599523b` + `0598ab0` (Sander's per-label IDNA decode) → **not** via PR #979 (that PR was closed *unmerged* on 2026-06-04 — the maintainer deferred to the fix landing in the `idna` package itself: kjd/idna@1a5bf80). It shipped instead via **PR #1018** ("Decode IDNA labels in non-leading host positions"), merged 2026-06-04. Already in httpx2.
+- `a9e7541` (no_proxy IPv6 CIDR + IPNetPattern) → split across two PRs: **#967** ("Allow IPv6 CIDR notation in `no_proxy`") merged 2026-06-12; **#969** ("Add IPNetPattern for accurate CIDR proxy/mount matching") still open.
+- `417d6c6` (params don't overwrite baseurl) → still open as **PR #966**.
 - `1756dbb` (elapsed time on stream wrapper) → already merged as `de30f399` in httpx2.
 - `04d7191` (tests on random port) → already merged as `999da321` (#994).
 - `52fb1ab` (zstd decompressobj reuse) → already merged as `ae5995f7` in httpx2.
@@ -67,24 +70,25 @@ not relevant to httpx2.
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `c4e9340` | Explicitly close async generators to prevent Trio warnings | Adds `safe_async_iterate()` / `safe_iterate()` context managers and applies them across `connection_pool.py`, `http11.py`, `http2.py`, `_models.py`. Port of encode/httpcore#1019 (Alex Grönholm). |
-| `9d86b44` | Reduce lock contention in `PoolByteStream.close()` | Marks pool requests closed outside the lock, cleans up inside `_assign_requests_to_connections()`. Also adds `Origin.__hash__`. Port of encode/httpcore#1038. |
+| `9d86b44` | Reduce lock contention in `PoolByteStream.close()` | Verified still missing — `connection_pool.py:402` still does `self._pool._requests.remove(self._pool_request)` inside `self._pool._optional_thread_lock`, and `Origin` in `_models.py` still has no `__hash__`. Port of encode/httpcore#1038. |
 
 ### Refactor worth considering
 
 | Fork commit | Title | Notes |
 |---|---|---|
-| `91ad8ea` | Retire `map_exceptions` in favour of plain try/except (#1044) | Verified `map_exceptions` is still live in `httpcore2/_exceptions.py`, `_synchronization.py`, `_backends/{anyio,sync,trio}.py`. Justification: `@contextmanager` overhead on hot read/write paths. Larger diff (~120 lines net) — judgement call whether httpx2 wants it. |
+| — | — | (see Skipped below — the one refactor item tracked here now has an open PR) |
 
 ### Skipped — already in httpx2 / open PR / fork-only
 
-- `e88f30b` (h2 semaphore release on `NoAvailableStreamIDError`) → covered by open PR #1012 (port of encode/httpcore#1061).
-- `e88f30b` (h2 stream-events race in `_response_closed`) → covered by open PR #1013 (port of encode/httpcore#1062). Note: fork bundled both #1061 and #1062 in this one commit; split into two httpx2 PRs to match the upstream split.
-- `b192486` (close proxy connection when tunnel TLS handshake fails) → covered by open PR #1010.
-- `0387930` (propagate timeout through SOCKS5 handshake) → covered by open PR #1009.
-- `3058e2d` (RLock instead of Lock to prevent thread deadlock) → covered by open PR #1008.
-- `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → covered by open PR #1007.
-- `a7500e4` (pool poisoning on cancellation, `is_connected()`) → covered by open PR #983.
+- `c4e9340` (explicitly close async generators to prevent Trio warnings) → **already in httpx2**. `safe_async_iterate()` / `safe_iterate()` are present in `_utils.py` and used across `connection_pool.py`, `http2.py`, `_models.py`. `git log -S` shows this landed all the way back at the `httpcore` → `httpcore2` rename (`ce6ebe2b`, #138) — i.e. httpx2 already had equivalent handling before this survey started, not a port of the fork commit specifically.
+- `91ad8ea` (retire `map_exceptions` in favour of plain try/except, #1044) → now has **open PR #1038** ("Speed up exception handling", akx, opened 2026-06-16). `map_exceptions` is still live in `httpcore2/_exceptions.py`, `_synchronization.py`, `_backends/{anyio,sync,trio}.py`, `_async(/_sync)/http11.py`, confirming the gap; PR #1038 reports a ~9% microbenchmark win from the same change.
+- `e88f30b` (h2 semaphore release on `NoAvailableStreamIDError`) → **merged** as PR #1012 (port of encode/httpcore#1061).
+- `e88f30b` (h2 stream-events race in `_response_closed`) → **merged** as PR #1013 (port of encode/httpcore#1062). Note: fork bundled both #1061 and #1062 in this one commit; split into two httpx2 PRs to match the upstream split.
+- `b192486` (close proxy connection when tunnel TLS handshake fails) → still open as **PR #1010**.
+- `0387930` (propagate timeout through SOCKS5 handshake) → **merged** as PR #1009.
+- `3058e2d` (RLock instead of Lock to prevent thread deadlock) → **merged** as PR #1008.
+- `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → still open as **PR #1007**.
+- `a7500e4` (pool poisoning on cancellation, `is_connected()`) → **merged** as PR #983 (2026-07-14).
 - `199129e` (memoryview write) → already merged as `79f788b7` (#954) in httpx2.
 - `079768d` (connection_pool O(N²) + bugs) → already merged as `8027999f` (#974) in httpx2 — though confirm both bug fixes from the fork's commit are included, not just the perf rewrite.
 - `4a4eb1e` (anyio fast_acquire) → already merged as `b4c59404` (#970) in httpx2.
@@ -92,10 +96,14 @@ not relevant to httpx2.
 
 ## Suggested next steps
 
-1. The httpxyz **redirect/transport/stream fixes** (`36420a4`, `3573282`, `e0030ea`) are small, isolated, and have upstream PRs to cite — good quick wins next.
-2. `c4e9340` (close async generators to prevent Trio warnings) — bigger diff, benefits trio users mainly.
-3. `9d86b44` (lock contention in `PoolByteStream.close()`) — perf-shaped, requires care.
-4. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR.
-5. `91ad8ea` (`map_exceptions` retirement) is bigger and more opinionated — open an issue/discussion first.
+Genuinely unaddressed, with no open PR as of 2026-07-14:
 
-Already underway: `3058e2d` → PR #1008 (RLock), `0387930` → PR #1009 (SOCKS5 timeout), `b192486` → PR #1010 (CONNECT tunnel TLS close), `e88f30b` → PR #1012 (h2 semaphore release) + PR #1013 (h2 stream-events race).
+1. `bd45506` (`unquote` index error) and `3573282` (mounted transports leak on raise) — small, isolated, good quick wins.
+2. `9d86b44` (lock contention in `PoolByteStream.close()` + `Origin.__hash__`) — perf-shaped, requires care.
+3. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR.
+4. `70d302c` (RFC 9110 status texts) and `34e7bbe` (pickling `HTTPStatusError`) — small, additive.
+5. `f672124` (docs: `AsyncClient()` blocks the event loop during SSL init) — docs-only.
+
+Already in progress (open PRs, not yet merged): `b192486` → PR #1010 (CONNECT tunnel TLS close), `d3db03d`+`237ac4d` → PR #1007 (FQDN trailing-dot SNI), `36420a4` → PR #1064 (redirect response preserved on invalid Location), `e0030ea` → PR #1036 (real async iterator for ByteStreams), `91ad8ea` → PR #1038 (retire `map_exceptions`), `a9e7541`(part) → PR #969 (IPNetPattern), `417d6c6` → PR #966 (params vs baseurl).
+
+Landed since the last survey (2026-06-02 → 2026-07-14): `3058e2d` → PR #1008 (RLock), `0387930` → PR #1009 (SOCKS5 timeout), `e88f30b` → PR #1012 + PR #1013 (h2 fixes), `a7500e4` → PR #983 (pool poisoning on cancellation), `a9e7541`(part) → PR #967 (IPv6 CIDR in `no_proxy`), `599523b`+`0598ab0` → PR #1018 (IDNA decode, via upstream `idna` fix rather than PR #979 which closed unmerged).

@@ -37,7 +37,6 @@ not relevant to httpx2.
 | Fork commit | Title | Notes |
 |---|---|---|
 | `6866277` | Add `keep_method_for_redirects` option to Client / AsyncClient | Verified still missing — no reference anywhere in `src/httpx2`. Opt-in to preserve method on 301/302 (303 unaffected). Port of encode/httpx#3783 (Takashi Kajinami). |
-| `70d302c` | Add RFC 9110 status code texts | Verified still missing — `_status_codes.py:136` still reads `UNPROCESSABLE_ENTITY = 422, "Unprocessable Entity"` (RFC 9110 renamed the phrase). Old names would be kept as backwards-compat aliases. |
 | `34e7bbe` | Support pickling `HTTPStatusError` | Verified still missing — `_exceptions.py`'s `HTTPStatusError` has no `__reduce__`. Camillo Lugaresi's patch adds roundtrip-through-pickle support. |
 
 ### Docs worth pulling in
@@ -48,6 +47,7 @@ not relevant to httpx2.
 
 ### Skipped — already in httpx2 / already in an open PR / fork-only
 
+- `70d302c` (add RFC 9110 status code texts) → opened as **PR #1069** ("Add RFC 9110 status code constants", 2026-07-15). Renames `REQUEST_ENTITY_TOO_LARGE`→`CONTENT_TOO_LARGE` (413), `REQUEST_URI_TOO_LONG`→`URI_TOO_LONG` (414), `REQUESTED_RANGE_NOT_SATISFIABLE`→`RANGE_NOT_SATISFIABLE` (416), `UNPROCESSABLE_ENTITY`→`UNPROCESSABLE_CONTENT` (422); old names kept as aliases.
 - `36420a4` (fix `InvalidURL` raised on malformed Location header when `follow_redirects=False`) → now has **open PR #1064** ("Preserve the response when a redirect has an invalid Location and redirects are not followed", opened 2026-07-14). Confirmed still missing in `_client.py` (`_build_redirect_request` at line 951 is still called unconditionally before the `follow_redirects` check at line 954) and the PR's description matches the fork fix exactly.
 - `e0030ea` (add real async iterator for ByteStreams) → now has **open PR #1036** ("Add real async iterator for ByteStreams", akx, opened 2026-06-16). `_content.py:38` still uses an `async def __aiter__` generator, so the fix is still needed; the PR is a verbatim port of encode/httpx#3777 (Aarni Koskela), matching the fork commit.
 - `091af7358` (httpx2) covers the same SSL-cert-with-verify-str case as `094bf04` in httpxyz.
@@ -101,9 +101,9 @@ Genuinely unaddressed, with no open PR as of 2026-07-14:
 1. `bd45506` (`unquote` index error) and `3573282` (mounted transports leak on raise) — small, isolated, good quick wins.
 2. `9d86b44` (lock contention in `PoolByteStream.close()` + `Origin.__hash__`) — perf-shaped, requires care.
 3. `6866277` (`keep_method_for_redirects`) is a public-API addition — worth opening as a discussion before a PR.
-4. `70d302c` (RFC 9110 status texts) and `34e7bbe` (pickling `HTTPStatusError`) — small, additive.
+4. `34e7bbe` (pickling `HTTPStatusError`) — small, additive.
 5. `f672124` (docs: `AsyncClient()` blocks the event loop during SSL init) — docs-only.
 
-Already in progress (open PRs, not yet merged): `b192486` → PR #1010 (CONNECT tunnel TLS close), `d3db03d`+`237ac4d` → PR #1007 (FQDN trailing-dot SNI), `36420a4` → PR #1064 (redirect response preserved on invalid Location), `e0030ea` → PR #1036 (real async iterator for ByteStreams), `91ad8ea` → PR #1038 (retire `map_exceptions`), `a9e7541`(part) → PR #969 (IPNetPattern), `417d6c6` → PR #966 (params vs baseurl).
+Already in progress (open PRs, not yet merged): `b192486` → PR #1010 (CONNECT tunnel TLS close), `d3db03d`+`237ac4d` → PR #1007 (FQDN trailing-dot SNI), `36420a4` → PR #1064 (redirect response preserved on invalid Location), `e0030ea` → PR #1036 (real async iterator for ByteStreams), `91ad8ea` → PR #1038 (retire `map_exceptions`), `a9e7541`(part) → PR #969 (IPNetPattern), `417d6c6` → PR #966 (params vs baseurl), `70d302c` → PR #1069 (RFC 9110 status code constants).
 
 Landed since the last survey (2026-06-02 → 2026-07-14): `3058e2d` → PR #1008 (RLock), `0387930` → PR #1009 (SOCKS5 timeout), `e88f30b` → PR #1012 + PR #1013 (h2 fixes), `a7500e4` → PR #983 (pool poisoning on cancellation), `a9e7541`(part) → PR #967 (IPv6 CIDR in `no_proxy`), `599523b`+`0598ab0` → PR #1018 (IDNA decode, via upstream `idna` fix rather than PR #979 which closed unmerged).

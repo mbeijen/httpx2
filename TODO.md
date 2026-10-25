@@ -26,14 +26,14 @@ not relevant to httpx2.
 
 Not started, no PR anywhere:
 
-1. `f672124` — docs: `AsyncClient()` blocks the event loop during SSL init. Still true, mechanism changed.
-2. `6866277` — `keep_method_for_redirects`. Public API; discuss first.
-3. `9d86b44` — lock contention in `PoolByteStream.close()`. Wait for #1169.
+1. Sync `Client` half of `3573282` — `ExitStack` mirror of #1270 for `Client.close()` / `__enter__` / `__exit__`. Waiting on Kludex's answer on #1270 (sync parity there, or follow-up from me after it lands).
+2. `f672124` — docs: `AsyncClient()` blocks the event loop during SSL init. Still true, mechanism changed.
+3. `6866277` — `keep_method_for_redirects`. Public API; discuss first.
+4. `9d86b44` — lock contention in `PoolByteStream.close()`. Wait for #1169.
 
-My open PRs that need attention:
+My open PRs:
 
-- **#1070** (mounted transports closed on raise) — **overlaps** Kludex's #1270 (`AsyncExitStack` in `AsyncClient`, 2026-10-18), which also keeps closing others when one raises, but async-only. Coordinate: rebase #1070 to sync-only on top of #1270, or close.
-- **#1007** (trailing-dot SNI) — still open since 2026-06-01. Nearby work has moved: #1223 landed (TLS hostname override in proxy tunnels) and #1225 is open (match SNI overrides when reusing pooled connections). Rebase and check for conflicts.
+- **#1007** (trailing-dot SNI) — open since 2026-06-01. Brought up to date 2026-10-25 by merging `upstream/main` (no force push): resolved the conflict with #1223 by applying `normalized_host` to its new `server_hostname` fallback; #1225 only touches `connection_pool.py`, no conflict. PR body trimmed. Mergeable, awaiting review.
 - **#1172** (forward `uds` / `local_address` / `retries` to proxied connections) — not a fork port; open since 2026-08-29, no review yet.
 
 Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1038 (`91ad8ea`), #1211 (`34e7bbe`), #966 + duplicate #1174 (`417d6c6`).
@@ -55,7 +55,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 ### Skipped — already in httpx2 / already in an open PR / fork-only
 
 - `08cbebd` (SSL context dropped for HTTPS proxy from URL string) → **won't port.** Tried as **PR #1299** (2026-10-25), closed by me the same day. Giving an HTTPS proxy the transport's `verify=` context couples two separate trust domains: `verify=False` for an origin would silently disable verification of the proxy's certificate (security downgrade), and `verify=ctx` holding only a private CA would break a proxy with a publicly signed certificate. Current httpx2 behaviour (proxy uses the default context unless `Proxy(..., ssl_context=...)` is passed) is the safer one. The fork commit and encode/httpx#3506 only cover a URL string passed straight to the transport anyway; `Client` and env proxies were never affected by them. Possible follow-up: a docs-only PR for `docs/advanced/proxies.md` saying `verify=` applies to the origin only and showing `Proxy("https://…", ssl_context=ctx)` for a proxy behind a private CA (that's what httpxyz issue #6 needed). Note httpxyz itself still ships the coupled behaviour for `HTTPTransport(proxy="https://…", verify=…)`.
-- `3573282` (ensure mounted transports are closed even if main transport raises) → open as **PR #1070** (mine, 2026-07-15). Port of encode/httpx#3769; commit authored as Kadir Can Ozden. Now overlaps **PR #1270** (Kludex, 2026-10-18), which unwinds `AsyncClient` transports with an `AsyncExitStack` so one raising no longer skips the others — async only; the sync `Client` is not touched by #1270.
+- `3573282` (ensure mounted transports are closed even if main transport raises) → async half now tracked by **PR #1270** (Kludex, 2026-10-18, `AsyncExitStack` in `AsyncClient`: reverse-order unwind, any transport raising no longer skips the others). My **PR #1070** (port of encode/httpx#3769, Kadir Can Ozden) closed in its favour on 2026-10-25 — its `try/finally` only protected mounts when the *main* transport raised, and it conflicted with #1270. **Sync `Client` is still unfixed on main**; commented on #1270 offering an `ExitStack` mirror (also flagging the bot finding that a failed `__aenter__` should set `CLOSED` to avoid double-close).
 - `36420a4` (fix `InvalidURL` raised on malformed Location header when `follow_redirects=False`) → still open as **PR #1064** (devl00p). Still needed: `_client.py:1051` / `:1890` still call `_build_redirect_request` before the `follow_redirects` check.
 - `e0030ea` (add real async iterator for ByteStreams) → still open as **PR #1036** (akx). Still needed: `_content.py:34` is still an `async def __aiter__` generator. Related work landed (#1204, "Avoid nested async generator finalization errors") and is open (#1212, #1281, Kludex) but none of it touches `AsyncByteStream`/`_content.py`.
 - `34e7bbe` (support pickling `HTTPStatusError`) → now covered by **PR #1211** (drusc0, 2026-09-15, "don't leak request/response payload when pickling HTTPError"). Different approach from the fork: it makes all `HTTPError`s picklable *and* redacts the request/response payload, fixing the keyword-only `__init__` crash as a side effect. Review that rather than port the fork patch.
@@ -86,7 +86,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 ### Skipped — already in httpx2 / open PR / fork-only
 
 - `b192486` (close proxy connection when tunnel TLS handshake fails) → now tracked by **PR #1226** (itzzdev09, "Close the tunnel connection when TLS setup fails after CONNECT", fixes discussion #1175). My **PR #1010** closed in its favour on 2026-10-25: #1010 caught only `Exception` (missed cancellation during the handshake) and conflicted with #1223; #1226 catches `BaseException`, closes under `AsyncShieldCancellation`, and reproduces the `PoolTimeout` symptom. Left a comment on #1226 with one nit (swallowing `BaseException` from `aclose()` is broader than needed).
-- `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → still open as **PR #1007** (mine). Since then #1223 landed (honor TLS hostname override in proxy tunnels, touches `http_proxy.py` SNI) and #1225 is open (match SNI overrides when reusing pooled connections) — rebase and check for conflicts.
+- `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → still open as **PR #1007** (mine). Updated against main 2026-10-25 (merged in #1223's `server_hostname` refactor); mergeable.
 - `91ad8ea` (retire `map_exceptions` in favour of plain try/except) → still open as **PR #1038** (akx). `map_exceptions` still live in `_exceptions.py`, `_synchronization.py`, `_backends/{anyio,sync,trio}.py`, `_async/_sync http11.py`.
 - `c4e9340` (explicitly close async generators to prevent Trio warnings) → already in httpx2 since the `httpcore` → `httpcore2` rename (`ce6ebe2b`, #138). `safe_async_iterate()` was later reworked in #1204.
 - `e88f30b` (h2 semaphore release on `NoAvailableStreamIDError`) → **merged** as PR #1012.
@@ -101,7 +101,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 
 ## Suggested next steps
 
-1. Triage my stale PRs: coordinate **#1070** with Kludex's #1270, rebase **#1007** against #1223/#1225.
+1. Follow up on #1270: once Kludex answers, either let sync parity land there or open the `ExitStack` mirror for `Client`.
 2. `f672124` docs note — rewrite for the truststore / #1253 world before opening.
 3. `6866277` (`keep_method_for_redirects`) — open a discussion before a PR.
 4. `9d86b44` — park until #1169 is merged or closed.

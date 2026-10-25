@@ -26,27 +26,21 @@ not relevant to httpx2.
 
 Not started, no PR anywhere:
 
-1. `08cbebd` — SSL context dropped for HTTPS proxy given as a URL string. Small, real bug.
-2. `f672124` — docs: `AsyncClient()` blocks the event loop during SSL init. Still true, mechanism changed.
-3. `6866277` — `keep_method_for_redirects`. Public API; discuss first.
-4. `9d86b44` — lock contention in `PoolByteStream.close()`. Wait for #1169.
+1. `f672124` — docs: `AsyncClient()` blocks the event loop during SSL init. Still true, mechanism changed.
+2. `6866277` — `keep_method_for_redirects`. Public API; discuss first.
+3. `9d86b44` — lock contention in `PoolByteStream.close()`. Wait for #1169.
 
 My open PRs that need attention:
 
 - **#1010** (CONNECT tunnel TLS close) — **duplicated** by #1226 (itzzdev09, 2026-09-22, fixes issue #1175). Pick one; comment on both.
 - **#1070** (mounted transports closed on raise) — **overlaps** Kludex's #1270 (`AsyncExitStack` in `AsyncClient`, 2026-10-18), which also keeps closing others when one raises, but async-only. Coordinate: rebase #1070 to sync-only on top of #1270, or close.
 - **#1007** (trailing-dot SNI) — still open since 2026-06-01. Nearby work has moved: #1223 landed (TLS hostname override in proxy tunnels) and #1225 is open (match SNI overrides when reusing pooled connections). Rebase and check for conflicts.
+- **#1299** (HTTPS proxy uses `verify=` SSL context, port of `08cbebd`) — opened 2026-10-25.
 - **#1172** (forward `uds` / `local_address` / `retries` to proxied connections) — not a fork port; open since 2026-08-29, no review yet.
 
 Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1038 (`91ad8ea`), #1211 (`34e7bbe`), #966 + duplicate #1174 (`417d6c6`).
 
 ## httpxyz → httpx2
-
-### Behavioural fixes worth porting
-
-| Fork commit | Title | Notes |
-|---|---|---|
-| `08cbebd` | Fix SSL context dropped when constructing HTTPS proxy from URL string | Verified still missing 2026-10-25 — `_transports/default.py:148` and `:291` (and `_client.py:236`) still call `Proxy(url=proxy)` with no `ssl_context`, and `HTTPProxy(... proxy_ssl_context=proxy.ssl_context)` then gets `None`, so a custom CA passed via `verify=` is silently ignored for the proxy connection itself. No issue or PR upstream. Port of encode/httpx#3506. Surfaced via httpxyz issue #6. |
 
 ### Features worth considering
 
@@ -62,6 +56,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 
 ### Skipped — already in httpx2 / already in an open PR / fork-only
 
+- `08cbebd` (SSL context dropped for HTTPS proxy from URL string) → opened as **PR #1299** (mine, 2026-10-25). Not a verbatim port: the fork / encode/httpx#3506 fix only covered a URL string passed straight to the transport, but `Client._get_proxy_map` (and env proxies) already turn the string into a `Proxy` without `ssl_context`, so `Client(proxy="https://...", verify=ctx)` stayed broken. #1299 instead falls back to the transport's `ssl_context` when building `HTTPProxy` for an https proxy with no context of its own. Dan Herlihy credited as co-author.
 - `3573282` (ensure mounted transports are closed even if main transport raises) → open as **PR #1070** (mine, 2026-07-15). Port of encode/httpx#3769; commit authored as Kadir Can Ozden. Now overlaps **PR #1270** (Kludex, 2026-10-18), which unwinds `AsyncClient` transports with an `AsyncExitStack` so one raising no longer skips the others — async only; the sync `Client` is not touched by #1270.
 - `36420a4` (fix `InvalidURL` raised on malformed Location header when `follow_redirects=False`) → still open as **PR #1064** (devl00p). Still needed: `_client.py:1051` / `:1890` still call `_build_redirect_request` before the `follow_redirects` check.
 - `e0030ea` (add real async iterator for ByteStreams) → still open as **PR #1036** (akx). Still needed: `_content.py:34` is still an `async def __aiter__` generator. Related work landed (#1204, "Avoid nested async generator finalization errors") and is open (#1212, #1281, Kludex) but none of it touches `AsyncByteStream`/`_content.py`.
@@ -109,9 +104,8 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 ## Suggested next steps
 
 1. Triage my stale PRs: comment on **#1010** vs #1226 (duplicate), coordinate **#1070** with Kludex's #1270, rebase **#1007** against #1223/#1225.
-2. Port `08cbebd` (proxy SSL context from URL string) — small, isolated bug fix with an upstream PR to cite, and nobody else has picked it up.
-3. `f672124` docs note — rewrite for the truststore / #1253 world before opening.
-4. `6866277` (`keep_method_for_redirects`) — open a discussion before a PR.
-5. `9d86b44` — park until #1169 is merged or closed.
+2. `f672124` docs note — rewrite for the truststore / #1253 world before opening.
+3. `6866277` (`keep_method_for_redirects`) — open a discussion before a PR.
+4. `9d86b44` — park until #1169 is merged or closed.
 
 Landed since the 2026-07-14 survey: `70d302c` → PR #1069 (RFC 9110 status codes), `a9e7541` → #1165 + #1267 (CIDR / IPv6 in `NO_PROXY`; my #969 closed in favour of #1165).

@@ -34,7 +34,7 @@ Not started, no PR anywhere:
 My open PRs:
 
 - **#1007** (trailing-dot SNI) — open since 2026-06-01. Brought up to date 2026-10-25 by merging `upstream/main` (no force push): resolved the conflict with #1223 by applying `normalized_host` to its new `server_hostname` fallback; #1225 only touches `connection_pool.py`, no conflict. PR body trimmed. Mergeable, awaiting review.
-- **#1172** (forward `uds` / `local_address` / `retries` to proxied connections) — not a fork port; open since 2026-08-29, no review yet.
+- **#1172** (forward `uds` / `local_address` / `retries` to proxied connections, from discussion #1160) — not a fork port; open since 2026-08-29. Brought up to date 2026-10-25 by merging `upstream/main` (CHANGELOG edits dropped — maintainer writes those at release time), CI green, body trimmed + AI note added, pinged Kludex. Touches the same proxy files as Kludex's #1169 pool rewrite, so whichever lands second needs rework. If review stays stuck, consider splitting the SOCKS retry logic (new behaviour, ~half the source diff) from the pure plumbing.
 
 Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1038 (`91ad8ea`), #1211 (`34e7bbe`), #966 + duplicate #1174 (`417d6c6`).
 

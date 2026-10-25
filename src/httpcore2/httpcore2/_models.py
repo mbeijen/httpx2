@@ -167,8 +167,8 @@ class Origin:
 
         Use this wherever the hostname is passed to network operations (TLS
         SNI, DNS resolution, socket connect) so that a trailing dot in an
-        FQDN like ``myhost.internal.`` does not cause certificate verification
-        failures.  The raw ``host`` bytes are left untouched.
+        FQDN like `myhost.internal.` does not cause certificate verification
+        failures.  The raw `host` bytes are left untouched.
         """
         return self.host.decode("ascii").removesuffix(".")
 

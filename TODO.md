@@ -32,7 +32,6 @@ Not started, no PR anywhere:
 
 My open PRs that need attention:
 
-- **#1010** (CONNECT tunnel TLS close) — **duplicated** by #1226 (itzzdev09, 2026-09-22, fixes issue #1175). Pick one; comment on both.
 - **#1070** (mounted transports closed on raise) — **overlaps** Kludex's #1270 (`AsyncExitStack` in `AsyncClient`, 2026-10-18), which also keeps closing others when one raises, but async-only. Coordinate: rebase #1070 to sync-only on top of #1270, or close.
 - **#1007** (trailing-dot SNI) — still open since 2026-06-01. Nearby work has moved: #1223 landed (TLS hostname override in proxy tunnels) and #1225 is open (match SNI overrides when reusing pooled connections). Rebase and check for conflicts.
 - **#1172** (forward `uds` / `local_address` / `retries` to proxied connections) — not a fork port; open since 2026-08-29, no review yet.
@@ -86,7 +85,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 
 ### Skipped — already in httpx2 / open PR / fork-only
 
-- `b192486` (close proxy connection when tunnel TLS handshake fails) → still open as **PR #1010** (mine, 2026-06-02). **Duplicated** by **PR #1226** (itzzdev09, 2026-09-22, "Close the tunnel connection when TLS setup fails after CONNECT", fixes issue #1175) — same files, same fix. Comment on both and let the maintainer pick.
+- `b192486` (close proxy connection when tunnel TLS handshake fails) → now tracked by **PR #1226** (itzzdev09, "Close the tunnel connection when TLS setup fails after CONNECT", fixes discussion #1175). My **PR #1010** closed in its favour on 2026-10-25: #1010 caught only `Exception` (missed cancellation during the handshake) and conflicted with #1223; #1226 catches `BaseException`, closes under `AsyncShieldCancellation`, and reproduces the `PoolTimeout` symptom. Left a comment on #1226 with one nit (swallowing `BaseException` from `aclose()` is broader than needed).
 - `d3db03d` + `237ac4d` (FQDN trailing-dot SNI fix + `Origin.normalized_host`) → still open as **PR #1007** (mine). Since then #1223 landed (honor TLS hostname override in proxy tunnels, touches `http_proxy.py` SNI) and #1225 is open (match SNI overrides when reusing pooled connections) — rebase and check for conflicts.
 - `91ad8ea` (retire `map_exceptions` in favour of plain try/except) → still open as **PR #1038** (akx). `map_exceptions` still live in `_exceptions.py`, `_synchronization.py`, `_backends/{anyio,sync,trio}.py`, `_async/_sync http11.py`.
 - `c4e9340` (explicitly close async generators to prevent Trio warnings) → already in httpx2 since the `httpcore` → `httpcore2` rename (`ce6ebe2b`, #138). `safe_async_iterate()` was later reworked in #1204.
@@ -102,7 +101,7 @@ Others' open PRs covering fork commits: #1064 (`36420a4`), #1036 (`e0030ea`), #1
 
 ## Suggested next steps
 
-1. Triage my stale PRs: comment on **#1010** vs #1226 (duplicate), coordinate **#1070** with Kludex's #1270, rebase **#1007** against #1223/#1225.
+1. Triage my stale PRs: coordinate **#1070** with Kludex's #1270, rebase **#1007** against #1223/#1225.
 2. `f672124` docs note — rewrite for the truststore / #1253 world before opening.
 3. `6866277` (`keep_method_for_redirects`) — open a discussion before a PR.
 4. `9d86b44` — park until #1169 is merged or closed.

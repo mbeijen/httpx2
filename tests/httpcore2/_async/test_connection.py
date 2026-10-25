@@ -37,6 +37,7 @@ async def test_http_connection() -> None:
         assert not conn.is_closed()
         assert not conn.is_available()
         assert not conn.has_expired()
+        assert not conn.is_connected()
         assert repr(conn) == "<AsyncHTTPConnection [CONNECTING]>"
 
         async with conn.stream("GET", "https://example.com/") as response:
@@ -50,6 +51,7 @@ async def test_http_connection() -> None:
         assert not conn.is_closed()
         assert conn.is_available()
         assert not conn.has_expired()
+        assert conn.is_connected()
         assert repr(conn) == "<AsyncHTTPConnection ['https://example.com:443', HTTP/1.1, IDLE, Request Count: 1]>"
 
 
@@ -88,11 +90,11 @@ async def test_write_error_with_response_sent() -> None:
     """
 
     class ErrorOnRequestTooLargeStream(AsyncMockStream):
-        def __init__(self, buffer: typing.List[bytes], http2: bool = False) -> None:
+        def __init__(self, buffer: list[bytes], http2: bool = False) -> None:
             super().__init__(buffer, http2)
             self.count = 0
 
-        async def write(self, buffer: bytes, timeout: typing.Optional[float] = None) -> None:
+        async def write(self, buffer: bytes, timeout: float | None = None) -> None:
             self.count += len(buffer)
 
             if self.count > 1_000_000:
@@ -103,9 +105,9 @@ async def test_write_error_with_response_sent() -> None:
             self,
             host: str,
             port: int,
-            timeout: typing.Optional[float] = None,
-            local_address: typing.Optional[str] = None,
-            socket_options: typing.Optional[typing.Iterable[SOCKET_OPTION]] = None,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: typing.Iterable[SOCKET_OPTION] | None = None,
         ) -> AsyncMockStream:
             return ErrorOnRequestTooLargeStream(list(self._buffer), http2=self._http2)
 
@@ -138,11 +140,11 @@ async def test_write_error_without_response_sent() -> None:
     """
 
     class ErrorOnRequestTooLargeStream(AsyncMockStream):
-        def __init__(self, buffer: typing.List[bytes], http2: bool = False) -> None:
+        def __init__(self, buffer: list[bytes], http2: bool = False) -> None:
             super().__init__(buffer, http2)
             self.count = 0
 
-        async def write(self, buffer: bytes, timeout: typing.Optional[float] = None) -> None:
+        async def write(self, buffer: bytes, timeout: float | None = None) -> None:
             self.count += len(buffer)
 
             if self.count > 1_000_000:
@@ -153,9 +155,9 @@ async def test_write_error_without_response_sent() -> None:
             self,
             host: str,
             port: int,
-            timeout: typing.Optional[float] = None,
-            local_address: typing.Optional[str] = None,
-            socket_options: typing.Optional[typing.Iterable[SOCKET_OPTION]] = None,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: typing.Iterable[SOCKET_OPTION] | None = None,
         ) -> AsyncMockStream:
             return ErrorOnRequestTooLargeStream(list(self._buffer), http2=self._http2)
 
@@ -214,7 +216,7 @@ async def test_request_to_incorrect_origin() -> None:
 class NeedsRetryBackend(AsyncMockBackend):
     def __init__(
         self,
-        buffer: typing.List[bytes],
+        buffer: list[bytes],
         http2: bool = False,
         connect_tcp_failures: int = 2,
         start_tls_failures: int = 0,
@@ -227,9 +229,9 @@ class NeedsRetryBackend(AsyncMockBackend):
         self,
         host: str,
         port: int,
-        timeout: typing.Optional[float] = None,
-        local_address: typing.Optional[str] = None,
-        socket_options: typing.Optional[typing.Iterable[SOCKET_OPTION]] = None,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: typing.Iterable[SOCKET_OPTION] | None = None,
     ) -> AsyncNetworkStream:
         if self._connect_tcp_failures > 0:
             self._connect_tcp_failures -= 1
@@ -243,10 +245,10 @@ class NeedsRetryBackend(AsyncMockBackend):
             self._backend = backend
             self._stream = stream
 
-        async def read(self, max_bytes: int, timeout: typing.Optional[float] = None) -> bytes:
+        async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
             return await self._stream.read(max_bytes, timeout)
 
-        async def write(self, buffer: bytes, timeout: typing.Optional[float] = None) -> None:
+        async def write(self, buffer: bytes, timeout: float | None = None) -> None:
             await self._stream.write(buffer, timeout)
 
         async def aclose(self) -> None:
@@ -255,8 +257,8 @@ class NeedsRetryBackend(AsyncMockBackend):
         async def start_tls(
             self,
             ssl_context: ssl.SSLContext,
-            server_hostname: typing.Optional[str] = None,
-            timeout: typing.Optional[float] = None,
+            server_hostname: str | None = None,
+            timeout: float | None = None,
         ) -> "AsyncNetworkStream":
             if self._backend._start_tls_failures > 0:
                 self._backend._start_tls_failures -= 1

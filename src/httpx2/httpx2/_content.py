@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import inspect
 import warnings
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterable, Iterator, Mapping
 from json import dumps as json_dumps
 from typing import (
     Any,
-    AsyncIterable,
-    AsyncIterator,
-    Iterable,
-    Iterator,
-    Mapping,
 )
 from urllib.parse import urlencode
 
@@ -23,7 +19,7 @@ from ._types import (
     ResponseContent,
     SyncByteStream,
 )
-from ._utils import peek_filelike_length, primitive_value_to_str
+from ._utils import peek_filelike_remaining_length, primitive_value_to_str
 
 __all__ = ["ByteStream"]
 
@@ -60,8 +56,7 @@ class IteratorByteStream(SyncByteStream):
                 chunk = self._stream.read(self.CHUNK_SIZE)
         else:
             # Otherwise iterate.
-            for part in self._stream:
-                yield part
+            yield from self._stream
 
 
 class AsyncIteratorByteStream(AsyncByteStream):
@@ -84,9 +79,15 @@ class AsyncIteratorByteStream(AsyncByteStream):
                 yield chunk
                 chunk = await self._stream.aread(self.CHUNK_SIZE)
         else:
-            # Otherwise iterate.
-            async for part in self._stream:
-                yield part
+            # Otherwise iterate, making sure the wrapped stream is closed even if the
+            # consumer stops early (e.g. an exception is raised part-way through decoding).
+            stream = self._stream.__aiter__()
+            try:
+                async for part in stream:
+                    yield part
+            finally:
+                if isinstance(stream, AsyncGenerator):
+                    await stream.aclose()
 
 
 class UnattachedStream(AsyncByteStream, SyncByteStream):
@@ -118,13 +119,13 @@ def encode_content(
         # catches a case that's easy for users to make in error, and would
         # otherwise pass through here, like any other bytes-iterable,
         # because `dict` happens to be iterable. See issue #2491.
-        content_length_or_none = peek_filelike_length(content)
+        content_length_or_none = peek_filelike_remaining_length(content)
 
         if content_length_or_none is None:
             headers = {"Transfer-Encoding": "chunked"}
         else:
             headers = {"Content-Length": str(content_length_or_none)}
-        return headers, IteratorByteStream(content)  # type: ignore
+        return headers, IteratorByteStream(content)
 
     elif isinstance(content, AsyncIterable):
         headers = {"Transfer-Encoding": "chunked"}
@@ -133,10 +134,8 @@ def encode_content(
     raise TypeError(f"Unexpected type for 'content', {type(content)!r}")
 
 
-def encode_urlencoded_data(
-    data: RequestData,
-) -> tuple[dict[str, str], ByteStream]:
-    plain_data = []
+def encode_urlencoded_data(data: RequestData) -> tuple[dict[str, str], ByteStream]:
+    plain_data: list[tuple[str, str]] = []
     for key, value in data.items():
         if isinstance(value, (list, tuple)):
             plain_data.extend([(key, primitive_value_to_str(item)) for item in value])

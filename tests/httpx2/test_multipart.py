@@ -205,6 +205,29 @@ def test_multipart_headers_include_content_type() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("content_type", "file_headers"),
+    [
+        ("text/plain\r", {}),
+        (None, {"X-Test\t": "value"}),
+        (None, {"X-Test": "value\n"}),
+    ],
+)
+def test_multipart_rejects_invalid_file_headers(content_type: str | None, file_headers: dict[str, str]) -> None:
+    files = {"file": ("test.txt", b"<file content>", content_type, file_headers)}
+
+    with pytest.raises(ValueError, match="Invalid .*multipart header"):
+        httpx2.Request("POST", "https://www.example.com/", files=files)
+
+
+@pytest.mark.parametrize("control_character", ["\x00", "\x01", "\x08", "\x1f", "\x7f"])
+def test_multipart_rejects_control_characters_in_file_header_values(control_character: str) -> None:
+    files = {"file": ("test.txt", b"<file content>", None, {"X-Test": f"value{control_character}"})}
+
+    with pytest.raises(ValueError, match="Invalid control character in multipart header value"):
+        httpx2.Request("POST", "https://www.example.com/", files=files)
+
+
 def test_multipart_encode(tmp_path: typing.Any) -> None:
     path = str(tmp_path / "name.txt")
     with open(path, "wb") as f:
@@ -366,7 +389,7 @@ def test_multipart_encode_files_raises_exception_with_StringIO_content() -> None
     url = "https://www.example.com"
     files = {"file": ("test.txt", io.StringIO("content"), "text/plain")}
     with pytest.raises(TypeError):
-        httpx2.Request("POST", url, data={}, files=files)  # type: ignore
+        httpx2.Request("POST", url, data={}, files=files)  # type: ignore[arg-type]
 
 
 def test_multipart_encode_files_raises_exception_with_text_mode_file() -> None:
@@ -374,7 +397,7 @@ def test_multipart_encode_files_raises_exception_with_text_mode_file() -> None:
     with tempfile.TemporaryFile(mode="w") as upload:
         files = {"file": ("test.txt", upload, "text/plain")}
         with pytest.raises(TypeError):
-            httpx2.Request("POST", url, data={}, files=files)  # type: ignore
+            httpx2.Request("POST", url, data={}, files=files)  # type: ignore[arg-type]
 
 
 def test_multipart_encode_non_seekable_filelike() -> None:
@@ -434,6 +457,7 @@ def test_multipart_rewinds_files() -> None:
         files = {"file": upload}
         response = client.post("http://127.0.0.1:8000/", files=files)
         assert response.status_code == 200
+        assert int(response.request.headers["Content-Length"]) == len(response.content)
         assert b"\r\nHello, world!\r\n" in response.content
 
 

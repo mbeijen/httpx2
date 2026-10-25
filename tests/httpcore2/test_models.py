@@ -34,7 +34,7 @@ def test_url_cannot_include_unicode_strings() -> None:
         httpcore2.URL("https://www.example.com/☺")
     assert str(exc_info.value) == "url strings may not include unicode characters."
 
-    httpcore2.URL(scheme=b"https", host=b"www.example.com", target="/☺".encode("utf-8"))
+    httpcore2.URL(scheme=b"https", host=b"www.example.com", target="/☺".encode())
 
 
 def test_url_origin_socks5() -> None:
@@ -132,12 +132,11 @@ def test_response() -> None:
 
 
 class ByteIterator:
-    def __init__(self, chunks: typing.List[bytes]) -> None:
+    def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = chunks
 
     def __iter__(self) -> typing.Iterator[bytes]:
-        for chunk in self._chunks:
-            yield chunk
+        yield from self._chunks
 
 
 def test_response_sync_read() -> None:
@@ -167,12 +166,17 @@ def test_response_sync_streaming() -> None:
 
 
 class AsyncByteIterator:
-    def __init__(self, chunks: typing.List[bytes]) -> None:
-        self._chunks = chunks
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = iter(chunks)
 
-    async def __aiter__(self) -> typing.AsyncIterator[bytes]:
-        for chunk in self._chunks:
-            yield chunk
+    def __aiter__(self) -> typing.AsyncIterator[bytes]:
+        return self
+
+    async def __anext__(self) -> bytes:
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
 
 
 @pytest.mark.trio

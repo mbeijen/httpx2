@@ -33,8 +33,7 @@ class WSGIByteStream(SyncByteStream):
         self._result = _skip_leading_empty_chunks(result)
 
     def __iter__(self) -> typing.Iterator[bytes]:
-        for part in self._result:
-            yield part
+        yield from self._result
 
     def close(self) -> None:
         if self._close is not None:
@@ -108,6 +107,8 @@ class WSGITransport(BaseTransport):
             "SERVER_PROTOCOL": "HTTP/1.1",
             "REMOTE_ADDR": self.remote_addr,
         }
+        if request.content and "Content-Length" not in request.headers:
+            environ["CONTENT_LENGTH"] = str(len(request.content))
         for header_key, header_value in request.headers.raw:
             key = header_key.decode("ascii").upper().replace("-", "_")
             if key not in ("CONTENT_TYPE", "CONTENT_LENGTH"):

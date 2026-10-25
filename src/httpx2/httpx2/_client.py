@@ -6,14 +6,20 @@ import logging
 import time
 import typing
 import warnings
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from types import TracebackType
 
 from .__version__ import __version__
 from ._auth import Auth, BasicAuth, FunctionAuth
 from ._config import (
+    DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS,
+    DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS,
     DEFAULT_LIMITS,
+    DEFAULT_MAX_EVENT_SIZE_BYTES,
+    DEFAULT_MAX_MESSAGE_SIZE_BYTES,
     DEFAULT_MAX_REDIRECTS,
+    DEFAULT_QUEUE_SIZE,
     DEFAULT_TIMEOUT_CONFIG,
     Limits,
     Proxy,
@@ -27,9 +33,10 @@ from ._exceptions import (
     request_context,
 )
 from ._models import Cookies, Headers, Request, Response
+from ._sse import EventSource
 from ._status_codes import codes
+from ._transports import AsyncHTTPTransport, HTTPTransport
 from ._transports.base import AsyncBaseTransport, BaseTransport
-from ._transports.default import AsyncHTTPTransport, HTTPTransport
 from ._types import (
     AsyncByteStream,
     AuthTypes,
@@ -51,6 +58,8 @@ from ._utils import URLPattern, get_environment_proxies
 if typing.TYPE_CHECKING:
     import ssl  # pragma: no cover
 
+    from .websockets._api import AsyncWebSocketSession, WebSocketSession
+
 __all__ = ["USE_CLIENT_DEFAULT", "AsyncClient", "Client"]
 
 # The type annotation for @classmethod and context managers here follows PEP 484
@@ -63,28 +72,16 @@ def _is_https_redirect(url: URL, location: URL) -> bool:
     """
     Return 'True' if 'location' is a HTTPS upgrade of 'url'
     """
-    if url.host != location.host:
-        return False
+    origin = url.origin
+    location_origin = location.origin
 
     return (
-        url.scheme == "http"
-        and _port_or_default(url) == 80
-        and location.scheme == "https"
-        and _port_or_default(location) == 443
+        origin.host == location_origin.host
+        and origin.scheme == "http"
+        and origin.port == 80
+        and location_origin.scheme == "https"
+        and location_origin.port == 443
     )
-
-
-def _port_or_default(url: URL) -> int | None:
-    if url.port is not None:
-        return url.port
-    return {"http": 80, "https": 443}.get(url.scheme)
-
-
-def _same_origin(url: URL, other: URL) -> bool:
-    """
-    Return 'True' if the given URLs share the same origin.
-    """
-    return url.scheme == other.scheme and url.host == other.host and _port_or_default(url) == _port_or_default(other)
 
 
 class UseClientDefault:
@@ -143,8 +140,7 @@ class BoundSyncStream(SyncByteStream):
         self.elapsed: datetime.timedelta | None = None
 
     def __iter__(self) -> typing.Iterator[bytes]:
-        for chunk in self._stream:
-            yield chunk
+        yield from self._stream
 
     def close(self) -> None:
         self.elapsed = datetime.timedelta(seconds=time.perf_counter() - self._start)
@@ -164,8 +160,13 @@ class BoundAsyncStream(AsyncByteStream):
         self.elapsed: datetime.timedelta | None = None
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
-        async for chunk in self._stream:
-            yield chunk
+        stream = self._stream.__aiter__()
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            if isinstance(stream, AsyncGenerator):
+                await stream.aclose()
 
     async def aclose(self) -> None:
         self.elapsed = datetime.timedelta(seconds=time.perf_counter() - self._start)
@@ -261,7 +262,7 @@ class BaseClient:
 
         See also [Authentication][0].
 
-        [0]: /quickstart/#authentication
+        [0]: quickstart.md#authentication
         """
         return self._auth
 
@@ -346,7 +347,7 @@ class BaseClient:
 
         See also: [Request instances][0]
 
-        [0]: /advanced/clients/#request-instances
+        [0]: advanced/clients.md#request-instances
         """
         url = self._merge_url(url)
         headers = self._merge_headers(headers)
@@ -391,16 +392,16 @@ class BaseClient:
             return self.base_url.copy_with(raw_path=merge_raw_path)
         return merge_url
 
-    def _merge_cookies(self, cookies: CookieTypes | None = None) -> CookieTypes | None:
+    def _merge_cookies(self, cookies: CookieTypes | None = None) -> Cookies:
         """
         Merge a cookies argument together with any cookies on the client,
         to create the cookies used for the outgoing request.
         """
-        if cookies or self.cookies:
-            merged_cookies = Cookies(self.cookies)
-            merged_cookies.update(cookies)
-            return merged_cookies
-        return cookies
+        if not cookies:
+            return self.cookies
+        merged_cookies = Cookies(self.cookies)
+        merged_cookies.update(cookies)
+        return merged_cookies
 
     def _merge_headers(self, headers: HeaderTypes | None = None) -> HeaderTypes | None:
         """
@@ -458,12 +459,11 @@ class BaseClient:
         url = self._redirect_url(request, response)
         headers = self._redirect_headers(request, url, method)
         stream = self._redirect_stream(request, method)
-        cookies = Cookies(self.cookies)
         return Request(
             method=method,
             url=url,
             headers=headers,
-            cookies=cookies,
+            cookies=self.cookies,
             stream=stream,
             extensions=request.extensions,
         )
@@ -481,7 +481,9 @@ class BaseClient:
 
         # Do what the browsers do, despite standards...
         # Turn 302s into GETs.
-        if response.status_code == codes.FOUND and method != "HEAD":
+        # QUERY is excluded, per RFC 10008 Section 2.5.
+        # https://datatracker.ietf.org/doc/html/rfc10008#section-2.5
+        if response.status_code == codes.FOUND and method not in ("HEAD", "QUERY"):
             method = "GET"
 
         # If a POST is responded to with a 301, turn it into a GET.
@@ -524,7 +526,7 @@ class BaseClient:
         """
         headers = Headers(request.headers)
 
-        if not _same_origin(url, request.url):
+        if url.origin != request.url.origin:
             if not _is_https_redirect(request.url, url):
                 # Strip Authorization headers when responses are redirected
                 # away from the origin. (Except for direct HTTP to HTTPS redirects.)
@@ -768,7 +770,7 @@ class Client(BaseClient):
         [Merging of configuration][0] for how the various parameters
         are merged with client-level configuration.
 
-        [0]: /advanced/clients/#merging-of-configuration
+        [0]: advanced/clients.md#merging-of-configuration
         """
         if cookies is not None:
             message = (
@@ -810,7 +812,7 @@ class Client(BaseClient):
         follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
         timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
         extensions: RequestExtensions | None = None,
-    ) -> typing.Iterator[Response]:
+    ) -> Generator[Response]:
         """
         Alternative to `httpx2.request()` that streams the response body
         instead of loading it into memory at once.
@@ -819,7 +821,7 @@ class Client(BaseClient):
 
         See also: [Streaming Responses][0]
 
-        [0]: /quickstart#streaming-responses
+        [0]: quickstart.md#streaming-responses
         """
         request = self.build_request(
             method=method,
@@ -845,6 +847,104 @@ class Client(BaseClient):
         finally:
             response.close()
 
+    @contextmanager
+    def sse(
+        self,
+        url: URL | str,
+        *,
+        method: str = "GET",
+        content: RequestContent | None = None,
+        data: RequestData | None = None,
+        files: RequestFiles | None = None,
+        json: typing.Any | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+        max_event_size: int | None = DEFAULT_MAX_EVENT_SIZE_BYTES,
+    ) -> Generator[EventSource]:
+        """
+        Connect to a server-sent events endpoint and yield an `EventSource`.
+
+        Iterating the `EventSource` yields `ServerSentEvent` instances.
+
+        **Parameters**: See `httpx2.request`.
+        """
+        with self.stream(
+            method,
+            url,
+            content=content,
+            data=data,
+            files=files,
+            json=json,
+            params=params,
+            headers={"Accept": "text/event-stream", "Cache-Control": "no-store"} | Headers(headers),
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        ) as response:
+            yield EventSource(response, max_event_size=max_event_size)
+
+    @contextmanager
+    def websocket(
+        self,
+        url: URL | str,
+        *,
+        max_message_size_bytes: int = DEFAULT_MAX_MESSAGE_SIZE_BYTES,
+        queue_size: int = DEFAULT_QUEUE_SIZE,
+        keepalive_ping_interval_seconds: float | None = DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS,
+        keepalive_ping_timeout_seconds: float | None = DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS,
+        subprotocols: list[str] | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+    ) -> Generator[WebSocketSession]:
+        """
+        Open a WebSocket session, using this client's configuration.
+
+        The session is closed automatically when exiting the context manager.
+
+        ```python
+        with httpx2.Client() as client:
+            with client.websocket("ws://localhost:8000/ws") as ws:
+                ws.send_text("Hello!")
+                message = ws.receive_text()
+        ```
+        """
+        try:
+            from .websockets._api import connect_ws
+        except ImportError:  # pragma: no cover
+            raise ImportError(
+                "WebSocket support requires the `wsproto` package. Install it with `pip install httpx2[ws]`."
+            )
+
+        with connect_ws(
+            str(url),
+            self,
+            max_message_size_bytes=max_message_size_bytes,
+            queue_size=queue_size,
+            keepalive_ping_interval_seconds=keepalive_ping_interval_seconds,
+            keepalive_ping_timeout_seconds=keepalive_ping_timeout_seconds,
+            subprotocols=subprotocols,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        ) as session:
+            yield session
+
     def send(
         self,
         request: Request,
@@ -864,7 +964,7 @@ class Client(BaseClient):
 
         See also: [Request instances][0]
 
-        [0]: /advanced/clients/#request-instances
+        [0]: advanced/clients.md#request-instances
         """
         if self._state == ClientState.CLOSED:
             raise RuntimeError("Cannot send a request, as the client has been closed.")
@@ -1219,6 +1319,43 @@ class Client(BaseClient):
             extensions=extensions,
         )
 
+    def query(
+        self,
+        url: URL | str,
+        *,
+        content: RequestContent | None = None,
+        data: RequestData | None = None,
+        files: RequestFiles | None = None,
+        json: typing.Any | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+    ) -> Response:
+        """
+        Send a `QUERY` request.
+
+        **Parameters**: See `httpx2.request`.
+        """
+        return self.request(
+            "QUERY",
+            url,
+            content=content,
+            data=data,
+            files=files,
+            json=json,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        )
+
     def close(self) -> None:
         """
         Close transport and proxies.
@@ -1470,7 +1607,7 @@ class AsyncClient(BaseClient):
         and [Merging of configuration][0] for how the various parameters
         are merged with client-level configuration.
 
-        [0]: /advanced/clients/#merging-of-configuration
+        [0]: advanced/clients.md#merging-of-configuration
         """
 
         if cookies is not None:  # pragma: no cover
@@ -1513,7 +1650,7 @@ class AsyncClient(BaseClient):
         follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
         timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
         extensions: RequestExtensions | None = None,
-    ) -> typing.AsyncIterator[Response]:
+    ) -> AsyncGenerator[Response]:
         """
         Alternative to `httpx2.request()` that streams the response body
         instead of loading it into memory at once.
@@ -1522,7 +1659,7 @@ class AsyncClient(BaseClient):
 
         See also: [Streaming Responses][0]
 
-        [0]: /quickstart#streaming-responses
+        [0]: quickstart.md#streaming-responses
         """
         request = self.build_request(
             method=method,
@@ -1548,6 +1685,104 @@ class AsyncClient(BaseClient):
         finally:
             await response.aclose()
 
+    @asynccontextmanager
+    async def sse(
+        self,
+        url: URL | str,
+        *,
+        method: str = "GET",
+        content: RequestContent | None = None,
+        data: RequestData | None = None,
+        files: RequestFiles | None = None,
+        json: typing.Any | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+        max_event_size: int | None = DEFAULT_MAX_EVENT_SIZE_BYTES,
+    ) -> AsyncGenerator[EventSource]:
+        """
+        Connect to a server-sent events endpoint and yield an `EventSource`.
+
+        Iterating the `EventSource` yields `ServerSentEvent` instances.
+
+        **Parameters**: See `httpx2.request`.
+        """
+        async with self.stream(
+            method,
+            url,
+            content=content,
+            data=data,
+            files=files,
+            json=json,
+            params=params,
+            headers={"Accept": "text/event-stream", "Cache-Control": "no-store"} | Headers(headers),
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        ) as response:
+            yield EventSource(response, max_event_size=max_event_size)
+
+    @asynccontextmanager
+    async def websocket(
+        self,
+        url: URL | str,
+        *,
+        max_message_size_bytes: int = DEFAULT_MAX_MESSAGE_SIZE_BYTES,
+        queue_size: int = DEFAULT_QUEUE_SIZE,
+        keepalive_ping_interval_seconds: float | None = DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS,
+        keepalive_ping_timeout_seconds: float | None = DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS,
+        subprotocols: list[str] | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+    ) -> AsyncGenerator[AsyncWebSocketSession]:
+        """
+        Open a WebSocket session, using this client's configuration.
+
+        The session is closed automatically when exiting the context manager.
+
+        ```python
+        async with httpx2.AsyncClient() as client:
+            async with client.websocket("ws://localhost:8000/ws") as ws:
+                await ws.send_text("Hello!")
+                message = await ws.receive_text()
+        ```
+        """
+        try:
+            from .websockets._api import aconnect_ws
+        except ImportError:  # pragma: no cover
+            raise ImportError(
+                "WebSocket support requires the `wsproto` package. Install it with `pip install httpx2[ws]`."
+            )
+
+        async with aconnect_ws(
+            str(url),
+            self,
+            max_message_size_bytes=max_message_size_bytes,
+            queue_size=queue_size,
+            keepalive_ping_interval_seconds=keepalive_ping_interval_seconds,
+            keepalive_ping_timeout_seconds=keepalive_ping_timeout_seconds,
+            subprotocols=subprotocols,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        ) as session:
+            yield session
+
     async def send(
         self,
         request: Request,
@@ -1567,7 +1802,7 @@ class AsyncClient(BaseClient):
 
         See also: [Request instances][0]
 
-        [0]: /advanced/clients/#request-instances
+        [0]: advanced/clients.md#request-instances
         """
         if self._state == ClientState.CLOSED:
             raise RuntimeError("Cannot send a request, as the client has been closed.")
@@ -1913,6 +2148,43 @@ class AsyncClient(BaseClient):
         return await self.request(
             "DELETE",
             url,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            extensions=extensions,
+        )
+
+    async def query(
+        self,
+        url: URL | str,
+        *,
+        content: RequestContent | None = None,
+        data: RequestData | None = None,
+        files: RequestFiles | None = None,
+        json: typing.Any | None = None,
+        params: QueryParamTypes | None = None,
+        headers: HeaderTypes | None = None,
+        cookies: CookieTypes | None = None,
+        auth: AuthTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+        timeout: TimeoutTypes | UseClientDefault = USE_CLIENT_DEFAULT,
+        extensions: RequestExtensions | None = None,
+    ) -> Response:
+        """
+        Send a `QUERY` request.
+
+        **Parameters**: See `httpx2.request`.
+        """
+        return await self.request(
+            "QUERY",
+            url,
+            content=content,
+            data=data,
+            files=files,
+            json=json,
             params=params,
             headers=headers,
             cookies=cookies,

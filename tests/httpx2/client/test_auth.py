@@ -5,9 +5,7 @@ Unit tests for auth classes also exist in tests/test_auth.py
 """
 
 import hashlib
-import netrc
 import os
-import sys
 import threading
 import typing
 from urllib.request import parse_keqv_list
@@ -70,7 +68,7 @@ class DigestApp:
             "algorithm": self.algorithm,
             "stale": "FALSE",
         }
-        challenge_str = ", ".join('{}="{}"'.format(key, value) for key, value in challenge_data.items() if value)
+        challenge_str = ", ".join(f'{key}="{value}"' for key, value in challenge_data.items() if value)
 
         headers = {
             "www-authenticate": f'Digest realm="httpx@example.org", {challenge_str}',
@@ -92,7 +90,7 @@ class RepeatAuth(httpx2.Auth):
         self.repeat = repeat
 
     def auth_flow(self, request: httpx2.Request) -> typing.Generator[httpx2.Request, httpx2.Response, None]:
-        nonces = []
+        nonces: list[str] = []
 
         for index in range(self.repeat):
             request.headers["Authorization"] = f"Repeat {index}"
@@ -250,21 +248,6 @@ def test_netrc_auth_credentials_do_not_exist() -> None:
     assert response.json() == {"auth": None}
 
 
-@pytest.mark.skipif(
-    sys.version_info >= (3, 11),
-    reason="netrc files without a password are valid from Python >= 3.11",
-)
-def test_netrc_auth_nopassword_parse_error() -> None:  # pragma: no cover
-    """
-    Python has different netrc parsing behaviours with different versions.
-    For Python < 3.11 a netrc file with no password is invalid. In this case
-    we want to allow the parse error to be raised.
-    """
-    netrc_file = str(FIXTURES_DIR / ".netrc-nopassword")
-    with pytest.raises(netrc.NetrcParseError):
-        httpx2.NetRCAuth(netrc_file)
-
-
 @pytest.mark.anyio
 async def test_auth_disable_per_request() -> None:
     url = "https://example.org/"
@@ -413,7 +396,7 @@ async def test_digest_auth(algorithm: str, expected_hash_length: int, expected_r
     assert response.status_code == 200
     assert len(response.history) == 1
 
-    authorization = typing.cast(typing.Dict[str, typing.Any], response.json())["auth"]
+    authorization = typing.cast(dict[str, typing.Any], response.json())["auth"]
     scheme, _, fields = authorization.partition(" ")
     assert scheme == "Digest"
 
@@ -444,7 +427,7 @@ async def test_digest_auth_no_specified_qop() -> None:
     assert response.status_code == 200
     assert len(response.history) == 1
 
-    authorization = typing.cast(typing.Dict[str, typing.Any], response.json())["auth"]
+    authorization = typing.cast(dict[str, typing.Any], response.json())["auth"]
     scheme, _, fields = authorization.partition(" ")
     assert scheme == "Digest"
 

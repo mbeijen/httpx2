@@ -24,8 +24,7 @@ def application_factory(output: typing.Iterable[bytes]) -> WSGIApplication:
 
         start_response(status, response_headers)
 
-        for item in output:
-            yield item
+        yield from output
 
     return wsgiref.validate.validator(application)
 
@@ -99,6 +98,24 @@ def test_wsgi_upload() -> None:
     transport = httpx2.WSGITransport(app=echo_body)
     client = httpx2.Client(transport=transport)
     response = client.post("http://www.example.org/", content=b"example")
+    assert response.status_code == 200
+    assert response.text == "example"
+
+
+def test_wsgi_upload_with_transfer_encoding() -> None:
+    def app(environ: WSGIEnvironment, start_response: StartResponse) -> typing.Iterable[bytes]:
+        content_length = int(environ.get("CONTENT_LENGTH", "0"))
+        output = environ["wsgi.input"].read(content_length)
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [output]
+
+    transport = httpx2.WSGITransport(app=app)
+    client = httpx2.Client(transport=transport)
+    response = client.post(
+        "http://www.example.org/",
+        headers={"Transfer-Encoding": "chunked"},
+        content=b"example",
+    )
     assert response.status_code == 200
     assert response.text == "example"
 

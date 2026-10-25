@@ -49,16 +49,18 @@ def clean_environ() -> typing.Iterator[None]:
     os.environ.update(original_environ)
 
 
-Message = typing.Dict[str, typing.Any]
+Message = dict[str, typing.Any]
 Receive = typing.Callable[[], typing.Awaitable[Message]]
-Send = typing.Callable[[typing.Dict[str, typing.Any]], typing.Coroutine[None, None, None]]
-Scope = typing.Dict[str, typing.Any]
+Send = typing.Callable[[dict[str, typing.Any]], typing.Coroutine[None, None, None]]
+Scope = dict[str, typing.Any]
 
 
 async def app(scope: Scope, receive: Receive, send: Send) -> None:
     assert scope["type"] == "http"
     if scope["path"].startswith("/slow_response"):
         await slow_response(scope, receive, send)
+    elif scope["path"].startswith("/stream_response"):
+        await stream_response(scope, receive, send)
     elif scope["path"].startswith("/status"):
         await status_code(scope, receive, send)
     elif scope["path"].startswith("/echo_body"):
@@ -107,6 +109,19 @@ async def slow_response(scope: Scope, receive: Receive, send: Send) -> None:
     )
     await sleep(1.0)  # Allow triggering a read timeout.
     await send({"type": "http.response.body", "body": b"Hello, world!"})
+
+
+async def stream_response(scope: Scope, receive: Receive, send: Send) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [[b"content-type", b"text/plain"]],
+        }
+    )
+    await send({"type": "http.response.body", "body": b"Hello\n", "more_body": True})
+    await sleep(0.1)
+    await send({"type": "http.response.body", "body": b"world!"})
 
 
 async def status_code(scope: Scope, receive: Receive, send: Send) -> None:
@@ -252,7 +267,7 @@ class TestServer(Server):
 
             try:
                 await asyncio.wait_for(self.restart_requested.wait(), timeout=0.1)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
             self.restart_requested.clear()
@@ -274,6 +289,6 @@ def serve_in_thread(server: TestServer) -> typing.Iterator[TestServer]:
 
 @pytest.fixture(scope="session")
 def server(free_tcp_port_factory: typing.Callable[[], int]) -> typing.Iterator[TestServer]:
-    config = Config(app=app, lifespan="off", loop="asyncio", port=free_tcp_port_factory())
+    config = Config(app=app, lifespan="off", loop="asyncio", ws="none", port=free_tcp_port_factory())
     server = TestServer(config=config)
     yield from serve_in_thread(server)

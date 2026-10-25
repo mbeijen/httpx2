@@ -24,7 +24,11 @@
 
 ::: httpx2.delete
 
+::: httpx2.query
+
 ::: httpx2.stream
+
+::: httpx2.websocket
 
 ## `Client`
 
@@ -43,7 +47,10 @@
         - put
         - patch
         - delete
+        - query
         - stream
+        - sse
+        - websocket
         - build_request
         - send
         - close
@@ -65,7 +72,10 @@
         - put
         - patch
         - delete
+        - query
         - stream
+        - sse
+        - websocket
         - build_request
         - send
         - aclose
@@ -146,10 +156,27 @@ what gets sent over the wire.*
 * `.query` - **str**
 * `.raw_path` - **str**
 * `.fragment` - **str**
+* `.origin` - **Origin**
 * `.is_ssl` - **bool**
 * `.is_absolute_url` - **bool**
 * `.is_relative_url` - **bool**
 * `def .copy_with([scheme], [authority], [path], [query], [fragment])` - **URL**
+
+## `Origin`
+
+*An immutable, hashable set of normalized scheme, host, and effective port information.*
+
+```pycon
+>>> URL('https://example.org').origin == URL('HTTPS://EXAMPLE.ORG:443').origin
+True
+>>> URL('wss://[::1]/socket').origin
+Origin(scheme='wss', host='::1', port=443)
+```
+
+* `def __init__(url)`
+* `.scheme` - **str**
+* `.host` - **str**
+* `.port` - **int** or **None**
 
 ## `Headers`
 
@@ -197,3 +224,57 @@ what gets sent over the wire.*
 * `.auth` - **tuple[str, str]**
 * `.headers` - **Headers**
 * `.ssl_context` - **SSLContext**
+
+## `EventSource`
+
+::: httpx2.EventSource
+    options:
+      members:
+        - response
+
+## `ServerSentEvent`
+
+::: httpx2.ServerSentEvent
+    options:
+      members:
+        - event
+        - data
+        - id
+        - retry
+        - json
+
+## `WebSocketSession`
+
+::: httpx2.websockets.WebSocketSession
+    options:
+      members:
+        - subprotocol
+        - response
+        - send_text
+        - send_bytes
+        - send_json
+        - receive_text
+        - receive_bytes
+        - receive_json
+        - ping
+        - close
+
+## `AsyncWebSocketSession`
+
+::: httpx2.websockets.AsyncWebSocketSession
+    options:
+      members:
+        - subprotocol
+        - response
+        - send_text
+        - send_bytes
+        - send_json
+        - receive_text
+        - receive_bytes
+        - receive_json
+        - ping
+        - close
+
+## `alias_httpx`
+
+::: httpx2.alias_httpx

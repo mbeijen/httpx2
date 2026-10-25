@@ -67,6 +67,88 @@ def test_url_no_authority() -> None:
     assert url.path == "/"
 
 
+def test_origin() -> None:
+    url = httpx2.URL("https://user:password@example.com/path?query#fragment")
+
+    assert url.origin == httpx2.Origin("https://example.com")
+    assert url.origin.scheme == "https"
+    assert url.origin.host == "example.com"
+    assert url.origin.port == 443
+    assert repr(url.origin) == "Origin(scheme='https', host='example.com', port=443)"
+
+
+def test_origin_is_immutable_and_hashable() -> None:
+    origin = httpx2.Origin("https://example.com")
+
+    with pytest.raises(AttributeError):
+        origin.host = "other.example.com"  # type: ignore[misc]
+
+    assert {origin, httpx2.Origin("HTTPS://EXAMPLE.COM:443")} == {origin}
+
+
+@pytest.mark.parametrize(
+    "url,scheme,port",
+    [
+        ("ftp://example.com", "ftp", 21),
+        ("http://example.com", "http", 80),
+        ("https://example.com", "https", 443),
+        ("ws://example.com/socket", "ws", 80),
+        ("wss://example.com/socket", "wss", 443),
+        ("custom://example.com", "custom", None),
+        ("custom://example.com:1234", "custom", 1234),
+    ],
+)
+def test_origin_effective_port(url: str, scheme: str, port: int | None) -> None:
+    origin = httpx2.Origin(url)
+
+    assert origin.scheme == scheme
+    assert origin.port == port
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("https://example.com", "HTTPS://EXAMPLE.COM:443"),
+        ("https://中国.icom.museum", "https://xn--fiqs8s.icom.museum:443"),
+        ("ws://example.com/socket", "ws://example.com:80/other"),
+        ("wss://example.com/socket", "wss://example.com:443/other"),
+        ("https://[::1]", "https://[0:0:0:0:0:0:0:1]"),
+        ("https://[2001:db8::1]", "https://[2001:0db8:0:0:0:0:0:1]"),
+        ("https://[::ffff:192.168.0.1]", "https://[::ffff:c0a8:1]"),
+        ("https://[fe80::1%25eth0]", "https://[fe80:0:0:0:0:0:0:1%25eth0]"),
+    ],
+)
+def test_equivalent_origins(left: str, right: str) -> None:
+    assert httpx2.URL(left).origin == httpx2.URL(right).origin
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("http://example.com", "https://example.com"),
+        ("http://example.com", "ws://example.com"),
+        ("https://example.com", "wss://example.com"),
+        ("https://example.com", "https://example.com:444"),
+        ("https://[::1]", "https://[::2]"),
+        ("https://[fe80::1%25eth0]", "https://[fe80::1%25eth1]"),
+        ("https://[fe80::1%eth0]", "https://[fe80::1%25eth0]"),
+        ("https://[2001:db8::1%30]", "https://[2001:db8::10]"),
+    ],
+)
+def test_distinct_origins(left: str, right: str) -> None:
+    assert httpx2.URL(left).origin != httpx2.URL(right).origin
+
+
+@pytest.mark.parametrize("url", ["", "/path", "mailto:user@example.com", "file:///tmp/example"])
+def test_relative_url_does_not_have_origin(url: str) -> None:
+    with pytest.raises(ValueError, match="URL must be absolute to have an origin"):
+        _ = httpx2.URL(url).origin
+
+
+def test_origin_preserves_percent_escaped_ipv6_scope() -> None:
+    assert httpx2.Origin("https://[2001:db8::1%2e]").host == "2001:db8::1%2e"
+
+
 # Tests for percent encoding across path, query, and fragment...
 
 
@@ -756,6 +838,14 @@ def test_url_merge_params_manipulation() -> None:
             "https",
             4433,
         ),
+        (
+            "https://www.égalité-femmes-hommes.gouv.fr",
+            "https://www.xn--galit-femmes-hommes-9ybf.gouv.fr",
+            "www.égalité-femmes-hommes.gouv.fr",
+            b"www.xn--galit-femmes-hommes-9ybf.gouv.fr",
+            "https",
+            None,
+        ),
     ],
     ids=[
         "http_with_port",
@@ -764,6 +854,7 @@ def test_url_merge_params_manipulation() -> None:
         "https_with_port",
         "http_with_custom_port",
         "https_with_custom_port",
+        "idna_label_after_ascii_label",
     ],
 )
 def test_idna_url(given: str, idna: str, host: str, raw_host: bytes, scheme: str, port: int | None) -> None:
@@ -783,6 +874,16 @@ def test_url_unescaped_idna_host() -> None:
 def test_url_escaped_idna_host() -> None:
     url = httpx2.URL("https://xn--fiqs8s.icom.museum/")
     assert url.raw_host == b"xn--fiqs8s.icom.museum"
+
+
+def test_url_malformed_idna_label_after_ascii_label() -> None:
+    url = httpx2.URL("https://a.b.c.xn--pokxncvks/")
+    assert url.host == "a.b.c.xn--pokxncvks"
+
+
+def test_url_mixed_valid_and_malformed_idna_labels() -> None:
+    url = httpx2.URL("https://xn--fiqs8s.xn--pokxncvks/")
+    assert url.host == "中国.xn--pokxncvks"
 
 
 def test_url_invalid_idna_host() -> None:

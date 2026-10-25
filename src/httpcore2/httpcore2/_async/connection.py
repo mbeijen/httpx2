@@ -128,7 +128,7 @@ class AsyncHTTPConnection(AsyncConnectionInterface):
 
                 if self._origin.scheme in (b"https", b"wss"):
                     ssl_context = default_ssl_context() if self._ssl_context is None else self._ssl_context
-                    alpn_protocols = ["http/1.1", "h2"] if self._http2 else ["http/1.1"]
+                    alpn_protocols = (["h2", "http/1.1"] if self._http1 else ["h2"]) if self._http2 else ["http/1.1"]
                     ssl_context.set_alpn_protocols(alpn_protocols)
 
                     kwargs = {
@@ -156,6 +156,9 @@ class AsyncHTTPConnection(AsyncConnectionInterface):
             async with Trace("close", logger, None, {}):
                 await self._connection.aclose()
 
+    def is_connected(self) -> bool:
+        return self._connection is not None and self._connection.is_connected()
+
     def is_available(self) -> bool:
         if self._connection is None:
             # If HTTP/2 support is enabled, and the resulting connection could
@@ -173,6 +176,9 @@ class AsyncHTTPConnection(AsyncConnectionInterface):
         if self._connection is None:
             return self._connect_failed
         return self._connection.is_idle()
+
+    def can_multiplex(self) -> bool:
+        return self._connection is not None and self._connection.can_multiplex()
 
     def is_closed(self) -> bool:
         if self._connection is None:

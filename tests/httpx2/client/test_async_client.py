@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 import typing
 from datetime import timedelta
 
@@ -79,6 +81,35 @@ async def test_stream_response(server: TestServer) -> None:
     assert response.status_code == 200
     assert body == b"Hello, world!"
     assert response.content == b"Hello, world!"
+
+
+def test_abandon_streamed_response(server: TestServer) -> None:
+    async def request() -> None:
+        client = httpx2.AsyncClient()
+        request = client.build_request("GET", server.url.copy_with(path="/stream_response"))
+        response = await client.send(request, stream=True)
+        generators: list[typing.AsyncGenerator[object, None]] = []
+        hooks = sys.get_asyncgen_hooks()
+
+        def firstiter(generator: typing.AsyncGenerator[object, None]) -> None:
+            generators.append(generator)
+            if hooks.firstiter is not None:
+                hooks.firstiter(generator)
+
+        sys.set_asyncgen_hooks(firstiter=firstiter)
+        try:
+            async for _line in response.aiter_lines():
+                break
+        finally:
+            sys.set_asyncgen_hooks(*hooks)
+            try:
+                for generator in reversed(generators):
+                    await generator.aclose()
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+    asyncio.run(request())
 
 
 @pytest.mark.anyio
@@ -164,6 +195,13 @@ async def test_delete(server: TestServer) -> None:
         response = await client.delete(server.url)
     assert response.status_code == 200
     assert response.text == "Hello, world!"
+
+
+@pytest.mark.anyio
+async def test_query(server: TestServer) -> None:
+    async with httpx2.AsyncClient() as client:
+        response = await client.query(server.url, content=b"Hello, world!")
+    assert response.status_code == 200
 
 
 @pytest.mark.anyio

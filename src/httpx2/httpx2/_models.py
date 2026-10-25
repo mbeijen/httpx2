@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import codecs
+import contextlib
 import datetime
 import email.message
 import json as jsonlib
 import re
 import typing
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from http.cookiejar import Cookie, CookieJar
 
 from ._content import ByteStream, UnattachedStream, encode_request, encode_response
+from ._cookies import IndexedCookieJar
 from ._decoders import (
-    SUPPORTED_DECODERS,
     ByteChunker,
     ContentDecoder,
     IdentityDecoder,
@@ -51,6 +52,8 @@ from ._utils import to_bytes_or_str, to_str
 __all__ = ["Cookies", "Headers", "Request", "Response"]
 
 SENSITIVE_HEADERS = {"authorization", "proxy-authorization"}
+
+_T = typing.TypeVar("_T")
 
 
 def _is_known_encoding(encoding: str) -> bool:
@@ -146,7 +149,7 @@ class Headers(typing.MutableMapping[str, str]):
         headers: HeaderTypes | None = None,
         encoding: str | None = None,
     ) -> None:
-        self._list = []  # type: typing.List[typing.Tuple[bytes, bytes, bytes]]
+        self._list: list[tuple[bytes, bytes, bytes]] = []
 
         if isinstance(headers, Headers):
             self._list = list(headers._list)
@@ -200,7 +203,7 @@ class Headers(typing.MutableMapping[str, str]):
         return [(raw_key, value) for raw_key, _, value in self._list]
 
     def keys(self) -> typing.KeysView[str]:
-        return {key.decode(self.encoding): None for _, key, value in self._list}.keys()
+        return {key.decode(self.encoding): None for _, key, _value in self._list}.keys()
 
     def values(self) -> typing.ValuesView[str]:
         values_dict: dict[str, str] = {}
@@ -236,7 +239,13 @@ class Headers(typing.MutableMapping[str, str]):
         """
         return [(key.decode(self.encoding), value.decode(self.encoding)) for _, key, value in self._list]
 
-    def get(self, key: str, default: typing.Any = None) -> typing.Any:
+    @typing.overload
+    def get(self, key: str, /) -> str | None: ...
+
+    @typing.overload
+    def get(self, key: str, default: _T) -> str | _T: ...
+
+    def get(self, key: str, default: _T | None = None) -> str | _T | None:
         """
         Return a header value. If multiple occurrences of the header occur
         then concatenate them together with commas.
@@ -263,7 +272,7 @@ class Headers(typing.MutableMapping[str, str]):
         if not split_commas:
             return values
 
-        split_values = []
+        split_values: list[str] = []
         for value in values:
             split_values.extend([item.strip() for item in value.split(",")])
         return split_values
@@ -277,6 +286,24 @@ class Headers(typing.MutableMapping[str, str]):
 
     def copy(self) -> Headers:
         return Headers(self, encoding=self.encoding)
+
+    def __or__(self, other: Mapping[str, str]) -> Headers:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        merged = self.copy()
+        merged.update(other)
+        return merged
+
+    def __ror__(self, other: Mapping[str, str]) -> Headers:
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        merged = Headers(other)
+        merged.update(self)
+        return merged
+
+    def __ior__(self, other: HeaderTypes) -> Headers:
+        self.update(other)
+        return self
 
     def __getitem__(self, key: str) -> str:
         """
@@ -390,7 +417,7 @@ class Request:
         self.extensions = {} if extensions is None else dict(extensions)
 
         if cookies:
-            Cookies(cookies).set_cookie_header(self)
+            (cookies if isinstance(cookies, Cookies) else Cookies(cookies)).set_cookie_header(self)
 
         if stream is None:
             content_type: str | None = self.headers.get("content-type")
@@ -427,7 +454,10 @@ class Request:
 
     def _prepare(self, default_headers: dict[str, str]) -> None:
         for key, value in default_headers.items():
-            # Ignore Transfer-Encoding if the Content-Length has been set explicitly.
+            # Ignore Content-Length if Transfer-Encoding has been set explicitly.
+            if key.lower() == "content-length" and "Transfer-Encoding" in self.headers:
+                continue
+            # Ignore Transfer-Encoding if Content-Length has been set explicitly.
             if key.lower() == "transfer-encoding" and "Content-Length" in self.headers:
                 continue
             self.headers.setdefault(key, value)
@@ -439,7 +469,7 @@ class Request:
 
         if not has_host and self.url.host:
             auto_headers.append((b"Host", self.url.netloc))
-        if not has_content_length and self.method in ("POST", "PUT", "PATCH"):
+        if not has_content_length and self.method in ("POST", "PUT", "PATCH", "QUERY"):
             auto_headers.append((b"Content-Length", b"0"))
 
         self.headers = Headers(auto_headers + self.headers.raw)
@@ -679,20 +709,13 @@ class Response:
         content, depending on the Content-Encoding used in the response.
         """
         if not hasattr(self, "_decoder"):
-            decoders: list[ContentDecoder] = []
             values = self.headers.get_list("content-encoding", split_commas=True)
-            for value in values:
-                value = value.strip().lower()
-                try:
-                    decoder_cls = SUPPORTED_DECODERS[value]
-                    decoders.append(decoder_cls())
-                except KeyError:
-                    continue
-
-            if len(decoders) == 1:
-                self._decoder = decoders[0]
-            elif len(decoders) > 1:
-                self._decoder = MultiDecoder(children=decoders)
+            encodings = [value.strip().lower() for value in values]
+            decoder = MultiDecoder([encoding for encoding in encodings if encoding != "identity"])
+            if len(decoder.children) == 1:
+                self._decoder = decoder.children[0]
+            elif decoder.children:
+                self._decoder = decoder
             else:
                 self._decoder = IdentityDecoder()
 
@@ -868,12 +891,12 @@ class Response:
             chunker = ByteChunker(chunk_size=chunk_size)
             with request_context(request=self._request):
                 for raw_bytes in self.iter_raw():
-                    decoded = decoder.decode(raw_bytes)
+                    for decoded in decoder.decode(raw_bytes):
+                        for chunk in chunker.decode(decoded):
+                            yield chunk
+                for decoded in decoder.flush():
                     for chunk in chunker.decode(decoded):
-                        yield chunk
-                decoded = decoder.flush()
-                for chunk in chunker.decode(decoded):
-                    yield chunk  # pragma: no cover
+                        yield chunk  # pragma: no cover
                 for chunk in chunker.flush():
                     yield chunk
 
@@ -920,16 +943,17 @@ class Response:
         self._num_bytes_downloaded = 0
         chunker = ByteChunker(chunk_size=chunk_size)
 
-        with request_context(request=self._request):
-            for raw_stream_bytes in self.stream:
-                self._num_bytes_downloaded += len(raw_stream_bytes)
-                for chunk in chunker.decode(raw_stream_bytes):
-                    yield chunk
+        try:
+            with request_context(request=self._request):
+                for raw_stream_bytes in self.stream:
+                    self._num_bytes_downloaded += len(raw_stream_bytes)
+                    for chunk in chunker.decode(raw_stream_bytes):
+                        yield chunk
 
-        for chunk in chunker.flush():
-            yield chunk
-
-        self.close()
+            for chunk in chunker.flush():
+                yield chunk
+        finally:
+            self.close()
 
     def close(self) -> None:
         """
@@ -949,10 +973,11 @@ class Response:
         Read and return the response content.
         """
         if not hasattr(self, "_content"):
-            self._content = b"".join([part async for part in self.aiter_bytes()])
+            async with contextlib.aclosing(self.aiter_bytes()) as parts:
+                self._content = b"".join([part async for part in parts])
         return self._content
 
-    async def aiter_bytes(self, chunk_size: int | None = None) -> typing.AsyncIterator[bytes]:
+    async def aiter_bytes(self, chunk_size: int | None = None) -> typing.AsyncGenerator[bytes, None]:
         """
         A byte-iterator over the decoded response content.
         This allows us to handle gzip, deflate, brotli, and zstd encoded responses.
@@ -965,13 +990,14 @@ class Response:
             decoder = self._get_content_decoder()
             chunker = ByteChunker(chunk_size=chunk_size)
             with request_context(request=self._request):
-                async for raw_bytes in self.aiter_raw():
-                    decoded = decoder.decode(raw_bytes)
+                async with contextlib.aclosing(self.aiter_raw()) as raw_stream:
+                    async for raw_bytes in raw_stream:
+                        for decoded in decoder.decode(raw_bytes):
+                            for chunk in chunker.decode(decoded):
+                                yield chunk
+                for decoded in decoder.flush():
                     for chunk in chunker.decode(decoded):
-                        yield chunk
-                decoded = decoder.flush()
-                for chunk in chunker.decode(decoded):
-                    yield chunk  # pragma: no cover
+                        yield chunk  # pragma: no cover
                 for chunk in chunker.flush():
                     yield chunk
 
@@ -1003,7 +1029,7 @@ class Response:
             for line in decoder.flush():
                 yield line
 
-    async def aiter_raw(self, chunk_size: int | None = None) -> typing.AsyncIterator[bytes]:
+    async def aiter_raw(self, chunk_size: int | None = None) -> typing.AsyncGenerator[bytes, None]:
         """
         A byte-iterator over the raw response content.
         """
@@ -1018,16 +1044,20 @@ class Response:
         self._num_bytes_downloaded = 0
         chunker = ByteChunker(chunk_size=chunk_size)
 
-        with request_context(request=self._request):
-            async for raw_stream_bytes in self.stream:
-                self._num_bytes_downloaded += len(raw_stream_bytes)
-                for chunk in chunker.decode(raw_stream_bytes):
-                    yield chunk
+        stream = self.stream.__aiter__()
+        try:
+            with request_context(request=self._request):
+                async for raw_stream_bytes in stream:
+                    self._num_bytes_downloaded += len(raw_stream_bytes)
+                    for chunk in chunker.decode(raw_stream_bytes):
+                        yield chunk
 
-        for chunk in chunker.flush():
-            yield chunk
-
-        await self.aclose()
+            for chunk in chunker.flush():
+                yield chunk
+        finally:
+            if isinstance(stream, AsyncGenerator):
+                await stream.aclose()
+            await self.aclose()
 
     async def aclose(self) -> None:
         """
@@ -1050,16 +1080,16 @@ class Cookies(typing.MutableMapping[str, str]):
 
     def __init__(self, cookies: CookieTypes | None = None) -> None:
         if cookies is None or isinstance(cookies, dict):
-            self.jar = CookieJar()
+            self.jar: CookieJar = IndexedCookieJar()
             if isinstance(cookies, dict):
                 for key, value in cookies.items():
                     self.set(key, value)
         elif isinstance(cookies, list):
-            self.jar = CookieJar()
+            self.jar = IndexedCookieJar()
             for key, value in cookies:
                 self.set(key, value)
         elif isinstance(cookies, Cookies):
-            self.jar = CookieJar()
+            self.jar = IndexedCookieJar()
             for cookie in cookies.jar:
                 self.jar.set_cookie(cookie)
         else:
@@ -1069,6 +1099,9 @@ class Cookies(typing.MutableMapping[str, str]):
         """
         Loads any cookies based on the response `Set-Cookie` headers.
         """
+        if "set-cookie" not in response.headers and "set-cookie2" not in response.headers:
+            return
+
         urllib_response = self._CookieCompatResponse(response)
         urllib_request = self._CookieCompatRequest(response.request)
 
@@ -1161,7 +1194,7 @@ class Cookies(typing.MutableMapping[str, str]):
         Delete all cookies. Optionally include a domain and path in
         order to only delete a subset of all the cookies.
         """
-        args = []
+        args: list[str] = []
         if domain is not None:
             args.append(domain)
         if path is not None:
@@ -1218,9 +1251,9 @@ class Cookies(typing.MutableMapping[str, str]):
             )
             self.request = request
 
-        def add_unredirected_header(self, key: str, value: str) -> None:
-            super().add_unredirected_header(key, value)
-            self.request.headers[key] = value
+        def add_unredirected_header(self, key: str, val: str) -> None:
+            super().add_unredirected_header(key, val)
+            self.request.headers[key] = val
 
     class _CookieCompatResponse:
         """

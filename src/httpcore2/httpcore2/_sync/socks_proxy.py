@@ -45,7 +45,11 @@ def _init_socks5_connection(
     host: bytes,
     port: int,
     auth: tuple[bytes, bytes] | None = None,
+    timeouts: dict[str, float | None] | None = None,
 ) -> None:
+    timeouts = timeouts or {}
+    write_timeout = timeouts.get("write", None)
+    read_timeout = timeouts.get("read", None)
     conn = socksio.socks5.SOCKS5Connection()
 
     # Auth method request
@@ -56,10 +60,10 @@ def _init_socks5_connection(
     )
     conn.send(socksio.socks5.SOCKS5AuthMethodsRequest([auth_method]))
     outgoing_bytes = conn.data_to_send()
-    stream.write(outgoing_bytes)
+    stream.write(outgoing_bytes, timeout=write_timeout)
 
     # Auth method response
-    incoming_bytes = stream.read(max_bytes=4096)
+    incoming_bytes = stream.read(max_bytes=4096, timeout=read_timeout)
     response = conn.receive_data(incoming_bytes)
     assert isinstance(response, socksio.socks5.SOCKS5AuthReply)
     if response.method != auth_method:
@@ -73,10 +77,10 @@ def _init_socks5_connection(
         username, password = auth
         conn.send(socksio.socks5.SOCKS5UsernamePasswordRequest(username, password))
         outgoing_bytes = conn.data_to_send()
-        stream.write(outgoing_bytes)
+        stream.write(outgoing_bytes, timeout=write_timeout)
 
         # Username/password response
-        incoming_bytes = stream.read(max_bytes=4096)
+        incoming_bytes = stream.read(max_bytes=4096, timeout=read_timeout)
         response = conn.receive_data(incoming_bytes)
         assert isinstance(response, socksio.socks5.SOCKS5UsernamePasswordReply)
         if not response.success:
@@ -85,10 +89,10 @@ def _init_socks5_connection(
     # Connect request
     conn.send(socksio.socks5.SOCKS5CommandRequest.from_address(socksio.socks5.SOCKS5Command.CONNECT, (host, port)))
     outgoing_bytes = conn.data_to_send()
-    stream.write(outgoing_bytes)
+    stream.write(outgoing_bytes, timeout=write_timeout)
 
     # Connect response
-    incoming_bytes = stream.read(max_bytes=4096)
+    incoming_bytes = stream.read(max_bytes=4096, timeout=read_timeout)
     response = conn.receive_data(incoming_bytes)
     assert isinstance(response, socksio.socks5.SOCKS5Reply)
     if response.reply_code != socksio.socks5.SOCKS5ReplyCode.SUCCEEDED:
@@ -229,15 +233,18 @@ class Socks5Connection(ConnectionInterface):
                         "host": self._remote_origin.normalized_host,
                         "port": self._remote_origin.port,
                         "auth": self._proxy_auth,
+                        "timeouts": timeouts,
                     }
                     with Trace("setup_socks5_connection", logger, request, kwargs) as trace:
                         _init_socks5_connection(**kwargs)
                         trace.return_value = stream
 
                     # Upgrade the stream to SSL
-                    if self._remote_origin.scheme == b"https":
+                    if self._remote_origin.scheme in (b"https", b"wss"):
                         ssl_context = default_ssl_context() if self._ssl_context is None else self._ssl_context
-                        alpn_protocols = ["http/1.1", "h2"] if self._http2 else ["http/1.1"]
+                        alpn_protocols = (
+                            (["h2", "http/1.1"] if self._http1 else ["h2"]) if self._http2 else ["http/1.1"]
+                        )
                         ssl_context.set_alpn_protocols(alpn_protocols)
 
                         kwargs = {
@@ -282,6 +289,9 @@ class Socks5Connection(ConnectionInterface):
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
+
+    def is_connected(self) -> bool:
+        return self._connection is not None and self._connection.is_connected()
 
     def is_available(self) -> bool:
         if self._connection is None:  # pragma: no cover

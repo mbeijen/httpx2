@@ -24,8 +24,8 @@ from .connection_pool import AsyncConnectionPool
 from .http11 import AsyncHTTP11Connection
 from .interfaces import AsyncConnectionInterface
 
-ByteOrStr = typing.Union[bytes, str]
-HeadersAsSequence = typing.Sequence[typing.Tuple[ByteOrStr, ByteOrStr]]
+ByteOrStr = bytes | str
+HeadersAsSequence = typing.Sequence[tuple[ByteOrStr, ByteOrStr]]
 HeadersAsMapping = typing.Mapping[ByteOrStr, ByteOrStr]
 
 
@@ -42,7 +42,7 @@ def merge_headers(
     """
     default_headers = [] if default_headers is None else list(default_headers)
     override_headers = [] if override_headers is None else list(override_headers)
-    has_override = set(key.lower() for key, value in override_headers)
+    has_override = set(key.lower() for key, _value in override_headers)
     default_headers = [(key, value) for key, value in default_headers if key.lower() not in has_override]
     return default_headers + override_headers
 
@@ -184,14 +184,16 @@ class AsyncForwardHTTPConnection(AsyncConnectionInterface):
             scheme=self._proxy_origin.scheme,
             host=self._proxy_origin.host,
             port=self._proxy_origin.port,
-            target=bytes(request.url),
+            target=bytes(request.url) if request.url.target.startswith(b"/") else request.url.target,
         )
         proxy_request = Request(
             method=request.method,
             url=url,
             headers=headers,
             content=request.stream,
-            extensions=request.extensions,
+            extensions={
+                key: value for key, value in request.extensions.items() if key not in ("sni_hostname", "target")
+            },
         )
         return await self._connection.handle_async_request(proxy_request)
 
@@ -203,6 +205,9 @@ class AsyncForwardHTTPConnection(AsyncConnectionInterface):
 
     def info(self) -> str:
         return self._connection.info()
+
+    def is_connected(self) -> bool:
+        return self._connection.is_connected()
 
     def is_available(self) -> bool:
         return self._connection.is_available()
@@ -271,14 +276,16 @@ class AsyncTunnelHTTPConnection(AsyncConnectionInterface):
                     method=b"CONNECT",
                     url=connect_url,
                     headers=connect_headers,
-                    extensions=request.extensions,
+                    extensions={
+                        key: value for key, value in request.extensions.items() if key not in ("sni_hostname", "target")
+                    },
                 )
                 connect_response = await self._connection.handle_async_request(connect_request)
 
                 if connect_response.status < 200 or connect_response.status > 299:
                     reason_bytes = connect_response.extensions.get("reason_phrase", b"")
                     reason_str = reason_bytes.decode("ascii", errors="ignore")
-                    msg = "%d %s" % (connect_response.status, reason_str)
+                    msg = f"{connect_response.status} {reason_str}"
                     await self._connection.aclose()
                     raise ProxyError(msg)
 
@@ -286,12 +293,13 @@ class AsyncTunnelHTTPConnection(AsyncConnectionInterface):
 
                 # Upgrade the stream to SSL
                 ssl_context = default_ssl_context() if self._ssl_context is None else self._ssl_context
-                alpn_protocols = ["http/1.1", "h2"] if self._http2 else ["http/1.1"]
+                alpn_protocols = (["h2", "http/1.1"] if self._http1 else ["h2"]) if self._http2 else ["http/1.1"]
                 ssl_context.set_alpn_protocols(alpn_protocols)
 
+                server_hostname = request.extensions.get("sni_hostname") or self._remote_origin.normalized_host
                 kwargs = {
                     "ssl_context": ssl_context,
-                    "server_hostname": self._remote_origin.normalized_host,
+                    "server_hostname": server_hostname,
                     "timeout": timeout,
                 }
                 async with Trace("start_tls", logger, request, kwargs) as trace:
@@ -329,6 +337,9 @@ class AsyncTunnelHTTPConnection(AsyncConnectionInterface):
 
     def info(self) -> str:
         return self._connection.info()
+
+    def is_connected(self) -> bool:
+        return self._connection.is_connected()
 
     def is_available(self) -> bool:
         return self._connection.is_available()

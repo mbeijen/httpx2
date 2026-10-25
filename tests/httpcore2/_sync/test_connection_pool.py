@@ -230,7 +230,7 @@ def test_trace_request() -> None:
         ]
     )
 
-    called = []
+    called: list[str] = []
 
     def trace(name: str, kwargs: dict[str, typing.Any]) -> None:
         called.append(name)
@@ -332,7 +332,7 @@ def test_connection_pool_with_http_exception() -> None:
     """
     network_backend = httpcore2.MockBackend([b"Wait, this isn't valid HTTP!"])
 
-    called = []
+    called: list[str] = []
 
     def trace(name: str, kwargs: dict[str, typing.Any]) -> None:
         called.append(name)
@@ -373,15 +373,15 @@ def test_connection_pool_with_connect_exception() -> None:
             self,
             host: str,
             port: int,
-            timeout: typing.Optional[float] = None,
-            local_address: typing.Optional[str] = None,
-            socket_options: typing.Optional[typing.Iterable[httpcore2.SOCKET_OPTION]] = None,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: typing.Iterable[httpcore2.SOCKET_OPTION] | None = None,
         ) -> httpcore2.NetworkStream:
             raise httpcore2.ConnectError("Could not connect")
 
     network_backend = FailedConnectBackend([])
 
-    called = []
+    called: list[str] = []
 
     def trace(name: str, kwargs: dict[str, typing.Any]) -> None:
         called.append(name)
@@ -521,7 +521,7 @@ def test_connection_pool_concurrency() -> None:
             response.read()
 
     with httpcore2.ConnectionPool(max_connections=1, network_backend=network_backend) as pool:
-        info_list: typing.List[typing.List[str]] = []
+        info_list: list[list[str]] = []
         with concurrency.open_nursery() as nursery:
             for domain in ["a.com", "b.com", "c.com", "d.com", "e.com"]:
                 nursery.start_soon(fetch, pool, domain, info_list)
@@ -565,7 +565,7 @@ def test_connection_pool_concurrency_same_domain_closing() -> None:
             response.read()
 
     with httpcore2.ConnectionPool(max_connections=1, network_backend=network_backend, http2=True) as pool:
-        info_list: typing.List[typing.List[str]] = []
+        info_list: list[list[str]] = []
         with concurrency.open_nursery() as nursery:
             for domain in ["a.com", "a.com", "a.com", "a.com", "a.com"]:
                 nursery.start_soon(fetch, pool, domain, info_list)
@@ -602,7 +602,7 @@ def test_connection_pool_concurrency_same_domain_keepalive() -> None:
             response.read()
 
     with httpcore2.ConnectionPool(max_connections=1, network_backend=network_backend, http2=True) as pool:
-        info_list: typing.List[typing.List[str]] = []
+        info_list: list[list[str]] = []
         with concurrency.open_nursery() as nursery:
             for domain in ["a.com", "a.com", "a.com", "a.com", "a.com"]:
                 nursery.start_soon(fetch, pool, domain, info_list)
@@ -758,7 +758,7 @@ def test_http11_upgrade_connection() -> None:
         ]
     )
 
-    called = []
+    called: list[str] = []
 
     def trace(name: str, kwargs: dict[str, typing.Any]) -> None:
         called.append(name)
@@ -789,3 +789,98 @@ def test_http11_upgrade_connection() -> None:
         "http11.response_closed.started",
         "http11.response_closed.complete",
     ]
+
+
+
+def test_connection_pool_assigns_released_connection_to_one_queued_request() -> None:
+    """
+    A released connection must be handed to exactly one queued request.
+
+    Assigning it to every queued request wakes them all, only for all but one
+    to fail with `ConnectionNotAvailable` and re-enter the queue, degrading
+    quadratically with queue depth.
+    """
+
+    class CountingPool(httpcore2.ConnectionPool):
+        assign_passes = 0
+
+        def _assign_requests_to_connections(self) -> list[httpcore2.ConnectionInterface]:
+            CountingPool.assign_passes += 1
+            return super()._assign_requests_to_connections()
+
+    network_backend = httpcore2.MockBackend(
+        [
+            b"HTTP/1.1 200 OK\r\n",
+            b"Content-Type: plain/text\r\n",
+            b"Content-Length: 13\r\n",
+            b"\r\n",
+            b"Hello, world!",
+        ]
+        * 10
+    )
+
+    def fetch(pool: httpcore2.ConnectionPool) -> None:
+        with pool.stream("GET", "https://example.com/") as response:
+            response.read()
+        assert response.status == 200
+
+    with CountingPool(max_connections=1, network_backend=network_backend) as pool:
+        with concurrency.open_nursery() as nursery:
+            for _ in range(10):
+                nursery.start_soon(fetch, pool)
+
+    # Exactly two passes per request: one when it is queued, one when it
+    # releases its connection.
+    assert CountingPool.assign_passes == 2 * 10
+
+
+
+def test_connection_pool_multiplexes_idle_http2_connection_within_a_pass() -> None:
+    """
+    A burst of requests arriving while a warmed HTTP/2 connection is idle
+    must be assigned to it immediately, not serialized behind the first
+    request's reservation.
+    """
+
+    class QueueObservingPool(httpcore2.ConnectionPool):
+        max_queued_after_pass = 0
+
+        def _assign_requests_to_connections(self) -> list[httpcore2.ConnectionInterface]:
+            closing = super()._assign_requests_to_connections()
+            queued = sum(request.is_queued() for request in self._requests)
+            QueueObservingPool.max_queued_after_pass = max(QueueObservingPool.max_queued_after_pass, queued)
+            return closing
+
+    def response_frames(stream_id: int) -> list[bytes]:
+        return [
+            hyperframe.frame.HeadersFrame(
+                stream_id=stream_id,
+                data=hpack.Encoder().encode([(b":status", b"200")]),
+                flags=["END_HEADERS"],
+            ).serialize(),
+            hyperframe.frame.DataFrame(stream_id=stream_id, data=b"Hello, world!", flags=["END_STREAM"]).serialize(),
+        ]
+
+    network_backend = httpcore2.MockBackend(
+        buffer=[
+            hyperframe.frame.SettingsFrame().serialize(),
+            *response_frames(1),
+            *response_frames(3),
+            *response_frames(5),
+            *response_frames(7),
+        ],
+        http2=True,
+    )
+
+    def fetch(pool: httpcore2.ConnectionPool) -> None:
+        response = pool.request("GET", "https://example.com/")
+        assert response.status == 200
+
+    with QueueObservingPool(network_backend=network_backend, max_connections=1, http2=True) as pool:
+        # Warm the connection; it returns to the pool IDLE.
+        fetch(pool)
+        with concurrency.open_nursery() as nursery:
+            for _ in range(3):
+                nursery.start_soon(fetch, pool)
+
+    assert QueueObservingPool.max_queued_after_pass == 0
